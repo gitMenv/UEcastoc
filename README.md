@@ -74,7 +74,11 @@ For the other version, the one with data, it has various "dependency counts", an
 Furthermore, the "ExportObjects" field in the empty one has counts 0, while the one with data does not.
 
 
-
+Update: I have found a few more things about this. 
+If the UTOC header version is 2, then the first entry in the list of chunk IDs has type 10, which is not "mapped" to a file.
+If the UTOC header version is 3, then this is the last entry.
+The compression blocks that the corresponding offset and lengths entry corresponds to, are compressed (or not), and when decompressed, they form a file with some special file format.
+I have dubbed this file format as "depsFile", and its specification can be found below.
 
 
 
@@ -145,6 +149,28 @@ CHUNK_META, total bytes: 33
 ```
 Possible flags are: NoneMetaFlag (0), CompressedMetaFlag (1), MemoryMappedMetaFlag (2)
 
+
+____
+### depsFile Format
+This still belongs to the .utoc file format, but it's encoded in the .ucas file.
+In the .ucas file, either the first large chunk of data (in header version 2), or the last chunk of data (in version 3) is specified as follows:
+
+```
+depsFile HEADER, total bytes: 32
+    uint64 {8}      -   Chunk ID of this "file"
+    uint64 {8}      -   Number of IDs (nID)
+    uint32 {4}      -   sizeof(chunkID) (always 8)
+    uint32 {4}      -   as of now, an unknown value
+    byte   {4}      -   zero bytes PADDING
+    uint32 {4}      -   Number of IDs (again, but now uint32?)
+```
+The header is followed by an ORDERED list of Chunk IDs, of size _nID_. 
+The list is unique, and it contains all of the IDs that are present in the .utoc file.
+I suspect that this is done for performance, for quick searching.
+
+The list is immediately followed by a uint32 value describing the size in bytes of the rest of the file.
+It excludes the trailling (8) zerobytes.
+The "rest of the file" seems to consist of some kind of data of which I'm not sure what it means yet, followed by yet another list of chunk IDs.
 
 ____
 # UAsset File Format
