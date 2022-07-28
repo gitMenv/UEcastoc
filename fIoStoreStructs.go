@@ -1,4 +1,4 @@
-package main
+package uecastoc
 
 import "encoding/binary"
 
@@ -27,7 +27,6 @@ type FIoFileIndexEntry struct {
 }
 
 type FIoChunkID struct {
-	// ID [12]uint8
 	ID      uint64
 	Index   uint16
 	Padding uint8

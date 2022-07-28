@@ -1,4 +1,4 @@
-package main
+package uecastoc
 
 import (
 	"bytes"
@@ -9,23 +9,23 @@ import (
 	"io/ioutil"
 	"os"
 	"strings"
-
-	"github.com/fatih/color"
 )
 
 const (
 	MagicUtoc       string = "-==--==--==--==-"
-	VersionUtoc     uint32 = 2
+	VersionUtoc     uint32 = 3
+	LegacyUtoc      uint32 = 2
 	UnrealSignature string = "\xC1\x83\x2A\x9E"
 	MountPoint      string = "../../../"
 	NoneEntry       uint32 = 0xffffffff
+	PackFileName    string = "Packed_P"
 )
 
 var (
 	ErrWrongMagic         = errors.New("error: magic number was not found")
 	ErrUnknownUtocVersion = errors.New("error: utoc version is unknown")
 	ErrContainerFlag      = errors.New("WARNING: the container flags were not 0 nor the indexed flag, so it could be a special case")
-	ErrExpectedBytesRead  = errors.New("expected to have read all bytes...")
+	ErrExpectedBytesRead  = errors.New("expected to have read all bytes")
 	ErrTocEntryBounds     = errors.New("TocEntry out of container bounds")
 )
 
@@ -39,21 +39,264 @@ const (
 	IndexedContainerFlag                      = (1 << iota)
 )
 
+type FileInfo struct {
+	Name          string
+	ID            uint64
+	Parent        *Directory
+	Dependencies  []uint64
+	ExportObjects uint32
+	offset        uint64
+	length        uint64
+	blocks        []FIoStoreTocCompressedBlockEntry
+	chunkType     uint8
+	FileHash      FIoChunkHash
+	someValue     uint32
+	randomIndex   uint64
+}
+
+// gets the relative path based on the prefix provided
+func (f *FileInfo) getFilePath(prefix string) string {
+	path := f.Name
+	parent := f.Parent
+
+	for parent != nil {
+		if parent.Name == MountPoint {
+			path = prefix + path
+			break
+		}
+		path = parent.Name + "/" + path
+		parent = parent.Parent
+	}
+	return path
+}
+
+// just to get unique paths
+func (d *Directory) getDirPath() string {
+	path := d.Name + "/"
+	parent := d.Parent
+
+	for parent != nil {
+		if parent.Name == MountPoint {
+			break
+		}
+		path = parent.Name + "/" + path
+		parent = parent.Parent
+	}
+	return path
+}
+
+// Fetches the compressed file from an open UCAS file and returns the data decompressed
+func (f *FileInfo) decompress(openUCASfile *os.File) (*[]byte, error) {
+	var data []byte
+	for _, b := range f.blocks {
+		_, err := openUCASfile.Seek(int64(b.GetOffset()), 0)
+		if err != nil {
+			return nil, err
+		}
+		buf := make([]byte, b.GetCompressedSize())
+		readBytes, err := openUCASfile.Read(buf)
+		if err != nil {
+			return nil, err
+		}
+		if uint32(readBytes) != b.GetCompressedSize() {
+			return nil, errors.New("could not read the correct size")
+		}
+		// now decompress
+		switch b.CompressionMethod {
+		case 0:
+			data = append(data, buf...)
+		case 1:
+			// decompress with zlib
+			r, err := zlib.NewReader(bytes.NewBuffer(buf))
+			defer r.Close()
+			if err != nil {
+				return nil, err
+			}
+			uncompressed, err := ioutil.ReadAll(r)
+			if err != nil {
+				return nil, err
+			}
+			if len(uncompressed) != int(b.GetUncompressedSize()) {
+				return nil, errors.New("didn't decompress correctly")
+			}
+			data = append(data, uncompressed...)
+		default:
+			return nil, errors.New("unknown compression method")
+		}
+
+	}
+
+	return &data, nil
+}
+
+type Directory struct {
+	Name      string
+	ChildDirs []*Directory
+	Files     []*FileInfo
+	Parent    *Directory
+}
+
+// goes through all the directories and returns the list of files
+// This is useful for compressing the files in order and keeping that structure for UserData
+func (d *Directory) flatten() (*[]*FileInfo, *[]*Directory) {
+	finfo := []*FileInfo{}
+	dirs := []*Directory{}
+
+	dirStack := []*Directory{d}
+	for len(dirStack) != 0 {
+		currDir := dirStack[0]
+		dirStack = dirStack[1:]
+		dirStack = append(dirStack, currDir.ChildDirs...)
+		dirs = append(dirs, currDir)
+		finfo = append(finfo, currDir.Files...)
+	}
+	return &finfo, &dirs
+}
+
+func (d *Directory) constructStringTable() *[]string {
+	strTable := []string{}
+	unique := make(map[string]bool)
+
+	dirStack := []*Directory{d}
+	for len(dirStack) != 0 {
+		currDir := dirStack[0]
+		dirStack = dirStack[1:]
+		dirStack = append(dirStack, currDir.ChildDirs...)
+		if _, ok := unique[currDir.Name]; !ok {
+			if currDir.Name == MountPoint {
+				continue
+			}
+			strTable = append(strTable, currDir.Name)
+			unique[currDir.Name] = true
+		}
+		for _, file := range currDir.Files {
+			// there can actually not be duplicate names for files
+			if _, ok := unique[file.Name]; !ok {
+				strTable = append(strTable, file.Name)
+				unique[file.Name] = true
+			}
+		}
+	}
+	return &strTable
+}
+
+func (d *Directory) getFirstSibling() *Directory {
+	p := d.Parent
+	if p == nil {
+		return nil
+	}
+	dirs := p.ChildDirs
+	myIndex := 0
+	for i, v := range dirs {
+		if d == v {
+			myIndex = i
+			break
+		}
+	}
+	if len(dirs)-1 > myIndex {
+		return dirs[myIndex+1]
+	}
+	return nil
+}
+func (d *Directory) getFirstChildDir() *Directory {
+	if len(d.ChildDirs) == 0 {
+		return nil
+	}
+	return d.ChildDirs[0]
+}
+func (d *Directory) getFirstChildFile() *FileInfo {
+	if len(d.Files) == 0 {
+		return nil
+	}
+	return d.Files[0]
+}
+func (f *FileInfo) getFileSibling() *FileInfo {
+	p := f.Parent
+	files := p.Files
+	myIndex := 0
+	for i, file := range files {
+		if file == f {
+			myIndex = i
+			break
+		}
+	}
+	if len(files)-1 > myIndex {
+		return files[myIndex+1]
+	}
+	return nil
+}
+func (d *Directory) constructDirectoryIndex() *[]byte {
+	var dirIndex FIoDirectoryIndexResource
+
+	dirIndex.MountPoint = FString(MountPoint)
+	strTable := d.constructStringTable()
+	flattenedFiles, flattenedDirs := d.flatten()
+
+	nameToIdx := make(map[string]uint32)
+	dirToIdx := make(map[string]uint32)
+	strToIdx := make(map[string]uint32)
+
+	for i, finfo := range *flattenedFiles {
+		nameToIdx[finfo.Name] = uint32(i)
+	}
+	for i, dir := range *flattenedDirs {
+		dirToIdx[dir.getDirPath()] = uint32(i)
+	}
+	for i, str := range *strTable {
+		strToIdx[str] = uint32(i)
+		dirIndex.StringTable = append(dirIndex.StringTable, FString(str))
+	}
+	// iterate through directories and create entries
+	for _, dir := range *flattenedDirs {
+		dentry := FIoDirectoryIndexEntry{NoneEntry, NoneEntry, NoneEntry, NoneEntry}
+		if dir.Name != MountPoint {
+			dentry.Name = strToIdx[dir.Name]
+		}
+		fcd := dir.getFirstChildDir()
+		if fcd != nil {
+			dentry.FirstChildEntry = dirToIdx[fcd.getDirPath()]
+		}
+		fsd := dir.getFirstSibling()
+		if fsd != nil {
+			dentry.NextSiblingEntry = dirToIdx[fsd.getDirPath()]
+		}
+		ffe := dir.getFirstChildFile()
+		if ffe != nil {
+			dentry.FirstFileEntry = nameToIdx[ffe.Name]
+		}
+		dirIndex.DirectoryEntries = append(dirIndex.DirectoryEntries, dentry)
+	}
+	for _, file := range *flattenedFiles {
+		fentry := FIoFileIndexEntry{strToIdx[file.Name], NoneEntry, nameToIdx[file.Name]}
+		sibling := file.getFileSibling()
+		if sibling != nil {
+			fentry.NextFileEntry = nameToIdx[sibling.Name]
+		}
+		dirIndex.FileEntries = append(dirIndex.FileEntries, fentry)
+	}
+	return dirIndex.getBytes()
+}
+
+type CasToc struct {
+	Root        *Directory
+	ContainerID uint64
+}
+
 // four components that make up a unique identifier.
 // Seems a bit overkill, but: https://github.com/EpicGames/UnrealEngine/blob/release/Engine/Source/Runtime/Core/Public/Misc/Guid.h
 type FGuid struct {
 	A, B, C, D uint32
 }
 
-// Bible: https://github.com/jashking/UnrealPakViewer/blob/master/PakAnalyzer/Private/IoStoreDefines.h
-// Jackpot: https://github.com/EpicGames/UnrealEngine/blob/99b6e203a15d04fc7bbbf554c421a985c1ccb8f1/Engine/Source/Runtime/Core/Private/IO/IoStore.h
+// useful: https://github.com/jashking/UnrealPakViewer/blob/master/PakAnalyzer/Private/IoStoreDefines.h
+// Unreal Docs: https://github.com/EpicGames/UnrealEngine/blob/99b6e203a15d04fc7bbbf554c421a985c1ccb8f1/Engine/Source/Runtime/Core/Private/IO/IoStore.h
 type UTocHeader struct {
 	Magic                       [16]byte
 	Version                     uint32 // they state it's uint8, but I doubt it
 	HeaderSize                  uint32
 	EntryCount                  uint32
 	CompressedBlockEntryCount   uint32
-	CompressedBlockEntrySize    uint32 // they say "For sanity checking", going insane...
+	CompressedBlockEntrySize    uint32 // they say "For sanity checking"
 	CompressionMethodNameCount  uint32
 	CompressionMethodNameLength uint32
 	CompressionBlockSize        uint32
@@ -69,6 +312,7 @@ type FIoStoreTocResourceInfo struct {
 	Header               UTocHeader
 	TocFileSize          uint64
 	ChunkIDs             []FIoChunkID
+	IDToChunk            map[uint64]FIoChunkID
 	ChunkIDToIndex       map[FIoChunkID]uint32
 	ChunkIDToOfflengths  map[FIoChunkID]FIoOffsetAndLength
 	CompressionBlocks    []FIoStoreTocCompressedBlockEntry
@@ -77,9 +321,7 @@ type FIoStoreTocResourceInfo struct {
 	CompressionMethods   []FName
 	DirectoryResource    FIoDirectoryIndexResource
 	// DirectoryIndexBuffer []byte
-	Offlengths   []FIoOffsetAndLength
-	filepath     string
-	openUCASFile *os.File
+	Offlengths []FIoOffsetAndLength
 }
 
 type FIoDirectoryIndexResource struct {
@@ -89,234 +331,474 @@ type FIoDirectoryIndexResource struct {
 	StringTable      []FString
 }
 
-func (d *FIoDirectoryIndexResource) printFile(index int, level int) {
+type UTocData struct {
+	IDs        []FIoChunkID
+	Offlengths []FIoOffsetAndLength
+	CBlocks    []FIoStoreTocCompressedBlockEntry
+	Metas      []FIoStoreTocEntryMeta
+	BlockSize  uint32
+	Deps       *Dependencies
+	FNameToID  map[string]uint64
+}
 
-	file := d.FileEntries[index]
+func (u *UTocData) writeUtocFile(f *os.File, root *Directory) {
+	// first, construct the directory index, as the size
+	// is required for the header
+	dirIndex := root.constructDirectoryIndex()
 
-	for i := 0; i < level; i++ {
-		fmt.Printf("\t")
+	// header
+	hdr := UTocHeader{
+		ContainerID:               FIoContainerID(u.Deps.ThisPackageID),
+		DirectoryIndexSize:        uint32(len(*dirIndex)),
+		EntryCount:                uint32(len(u.IDs)),
+		CompressedBlockEntryCount: uint32(len(u.CBlocks)),
+	}
+	hdr.setConstants()
+
+	// hdr is all set, now write whole utoc file
+	binary.Write(f, binary.LittleEndian, hdr)
+
+	// chunk IDs
+	for _, chid := range u.IDs {
+		binary.Write(f, binary.LittleEndian, chid)
 	}
 
-	color.Set(color.FgGreen)
-	if file.Name != NoneEntry {
-		fmt.Printf("F:")
-		nullbyte := 0
-		if d.StringTable[file.Name][len(d.StringTable[file.Name])-1] == 0x0 {
-			nullbyte = 1
+	// offsets and lengths
+	for _, offlength := range u.Offlengths {
+		binary.Write(f, binary.LittleEndian, offlength)
+	}
+
+	// compressionBlocks
+	for _, block := range u.CBlocks {
+		binary.Write(f, binary.LittleEndian, block)
+	}
+
+	// compression Methods (always the same)
+	f.Write(getBytesCompressionMethod())
+
+	// directory index
+	f.Write(*dirIndex)
+
+	// chunk Metas
+	for _, meta := range u.Metas {
+		binary.Write(f, binary.LittleEndian, meta)
+	}
+	// file was written in full
+}
+
+func recursiveExplorer(parent *Directory, pDir uint32, strTable *[]string, dirs *[]FIoDirectoryIndexEntry, files *[]FIoFileIndexEntry, dat *UTocData) {
+	dirIdx := (*dirs)[pDir].FirstChildEntry
+	fileIdx := (*dirs)[pDir].FirstFileEntry
+	if dirIdx == NoneEntry && fileIdx == NoneEntry { // base case
+		return
+	}
+
+	for dirIdx != NoneEntry {
+		dirEntry := (*dirs)[dirIdx]
+		newDirectory := Directory{Name: (*strTable)[dirEntry.Name], Parent: parent}
+		parent.ChildDirs = append(parent.ChildDirs, &newDirectory)
+		recursiveExplorer(&newDirectory, dirIdx, strTable, dirs, files, dat)
+		dirIdx = dirEntry.NextSiblingEntry
+	}
+	for fileIdx != NoneEntry {
+		fileEntry := (*files)[fileIdx]
+		startBlock := dat.Offlengths[fileEntry.UserData].GetOffset() / uint64(dat.BlockSize)
+		endBlock := dat.Offlengths[fileEntry.UserData+1].GetOffset() / uint64(dat.BlockSize)
+		blocks := dat.CBlocks[startBlock:endBlock]
+
+		newFile := FileInfo{
+			Name:          (*strTable)[fileEntry.Name],
+			ID:            dat.IDs[fileEntry.UserData].ID,
+			chunkType:     dat.IDs[fileEntry.UserData].Type,
+			Parent:        parent,
+			offset:        dat.Offlengths[fileEntry.UserData].GetOffset(),
+			length:        dat.Offlengths[fileEntry.UserData].GetLength(),
+			blocks:        blocks,
+			Dependencies:  dat.Deps.ChunkIDToDependencies[dat.IDs[fileEntry.UserData].ID].Dependencies,
+			ExportObjects: dat.Deps.ChunkIDToDependencies[dat.IDs[fileEntry.UserData].ID].ExportObjects,
 		}
-		fmt.Println(d.StringTable[file.Name][:len(d.StringTable[file.Name])-nullbyte])
-	}
-	color.Unset()
-	if file.NextFileEntry != NoneEntry {
-		d.printFile(int(file.NextFileEntry), level)
+		dat.FNameToID[newFile.Name] = newFile.ID
+		parent.Files = append(parent.Files, &newFile)
+		fileIdx = fileEntry.NextFileEntry
 	}
 }
 
-//printDirectory starts at the root, and then prints every single subfolder in its own level.
-// just for debugging purposes
-func (d *FIoDirectoryIndexResource) printDirectory(index int, level int) {
-	dir := d.DirectoryEntries[index]
-	for i := 0; i < level; i++ {
-		fmt.Printf("\t")
-	}
-	// find all siblings of this directory
-	if dir.Name != NoneEntry {
-		nullbyte := 0
-		if d.StringTable[dir.Name][len(d.StringTable[dir.Name])-1] == 0x0 {
-			nullbyte = 1
-		}
-		fmt.Println(d.StringTable[dir.Name][:len(d.StringTable[dir.Name])-nullbyte])
-	}
-	// depth
-	if dir.FirstChildEntry != NoneEntry {
-		d.printDirectory(int(dir.FirstChildEntry), level+1)
-	}
-	if dir.FirstFileEntry != NoneEntry {
-		d.printFile(int(dir.FirstFileEntry), level+1)
-	}
-	if dir.NextSiblingEntry != NoneEntry {
-		d.printDirectory(int(dir.NextSiblingEntry), level)
-	}
-
-}
-
-func (h *FIoStoreTocResourceInfo) decompressBlock(block *FIoStoreTocCompressedBlockEntry) *[]byte {
-	var requestedBytes []byte
-	// open the .ucas file first
-	if h.openUCASFile == nil {
-		f, err := os.Open(h.filepath + ".ucas")
-		if err != nil {
-			fmt.Println("problem with file reading:", err)
-			return &requestedBytes
-		}
-		h.openUCASFile = f
-	}
-	ucasFile := h.openUCASFile
-
-	_, err := ucasFile.Seek(int64(block.GetOffset()), 0)
-	if err != nil {
-		fmt.Println("err:", err)
-		return &requestedBytes
-	}
-	buf := make([]byte, block.GetCompressedSize())
-	readBytes, err := ucasFile.Read(buf)
-	if err != nil {
-		fmt.Println("err:", err)
-		return &requestedBytes
-	}
-	if uint32(readBytes) != block.GetCompressedSize() {
-		fmt.Println("couldn't read enough bytes...")
-	}
-	// now decompress
-	switch block.CompressionMethod {
-	case 0:
-		requestedBytes = append(requestedBytes, buf...)
-	case 1:
-		// decompress with zlib
-		r, err := zlib.NewReader(bytes.NewBuffer(buf))
-		defer r.Close()
-		if err != nil {
-			fmt.Println(err)
-			return &requestedBytes
-		}
-		uncompressed, err := ioutil.ReadAll(r)
-		if err != nil {
-			fmt.Println(err)
-			return &requestedBytes
-		}
-		if len(uncompressed) != int(block.GetUncompressedSize()) {
-			fmt.Println("didn't decompress correctly!")
-			return &requestedBytes
-		}
-		requestedBytes = append(requestedBytes, uncompressed...)
-	default:
-		fmt.Println("unknown compression method!!!")
-		return &requestedBytes
-	}
-
-	return &requestedBytes
-
-}
-
-func fetchSignature(filepath string) *[]byte {
-	var ret []byte
-	if filepath[len(filepath)-7:] == ".uasset" {
-		ret = []byte(UnrealSignature)
-	}
-	return &ret
-}
-
-func parseDirectoryBufferThing(directoryIndexBuffer *[]byte, size uint32) *FIoDirectoryIndexResource {
-	buff := *directoryIndexBuffer
-	var dir FIoDirectoryIndexResource
-
-	// first parse the mountpoint
-	mountStrLength := binary.LittleEndian.Uint32(buff)
-	buff = buff[4:] // consume integer
-	dir.MountPoint = FString(string(buff[:mountStrLength]))
-	buff = buff[mountStrLength:]
-	// now parse this beast
-	dirEntriesCount := binary.LittleEndian.Uint32(buff)
-	buff = buff[4:]
+func parseDirectoryIndex(r *bytes.Reader, dat *UTocData) (root *Directory) {
+	rt := Directory{Parent: nil}
+	root = &rt
+	var size, dirCount, fileCount, stringCount uint32
 	var dirEntry FIoDirectoryIndexEntry
-	for i := 0; i < int(dirEntriesCount); i++ {
-		binary.Read(bytes.NewReader(buff), binary.LittleEndian, &dirEntry)
-		buff = buff[binary.Size(dirEntry):]
-		dir.DirectoryEntries = append(dir.DirectoryEntries, dirEntry)
-	}
-	fileIndexCount := binary.LittleEndian.Uint32(buff)
-	buff = buff[4:]
-
 	var fileEntry FIoFileIndexEntry
-	for i := 0; uint32(i) < fileIndexCount; i++ {
-		binary.Read(bytes.NewReader(buff), binary.LittleEndian, &fileEntry)
-		buff = buff[binary.Size(fileEntry):]
-		dir.FileEntries = append(dir.FileEntries, fileEntry)
-	}
-	numberOfStrings := binary.LittleEndian.Uint32(buff)
-	buff = buff[4:]
+	dirEntries := []FIoDirectoryIndexEntry{}
+	fileEntries := []FIoFileIndexEntry{}
+	strTable := []string{}
 
-	for i := 0; uint32(i) < numberOfStrings; i++ {
-		// first read stringsize, then read string
-		stringSize := binary.LittleEndian.Uint32(buff)
-		buff = buff[4:]
-		dir.StringTable = append(dir.StringTable, FString(string(buff[:stringSize])))
-		buff = buff[stringSize:]
-	}
-	// dir.printDirectory(0, 0)
-	// fmt.Println()
+	// starts with the root mount string length
+	binary.Read(r, binary.LittleEndian, &size)
 
-	return &dir
+	mountPoint := make([]byte, size)
+	binary.Read(r, binary.LittleEndian, &mountPoint)
+	root.Name = string(mountPoint[:len(mountPoint)-1])
+
+	binary.Read(r, binary.LittleEndian, &dirCount)
+
+	for i := 0; uint32(i) < dirCount; i++ {
+		binary.Read(r, binary.LittleEndian, &dirEntry)
+		dirEntries = append(dirEntries, dirEntry)
+	}
+
+	binary.Read(r, binary.LittleEndian, &fileCount)
+
+	for i := 0; uint32(i) < fileCount; i++ {
+		binary.Read(r, binary.LittleEndian, &fileEntry)
+		fileEntries = append(fileEntries, fileEntry)
+	}
+
+	binary.Read(r, binary.LittleEndian, &stringCount)
+
+	for i := 0; uint32(i) < stringCount; i++ {
+		binary.Read(r, binary.LittleEndian, &size)
+		newString := make([]byte, size)
+		binary.Read(r, binary.LittleEndian, &newString)
+		strTable = append(strTable, string(newString[:len(newString)-1]))
+	}
+	recursiveExplorer(root, 0, &strTable, &dirEntries, &fileEntries, dat)
+	return root
 }
 
-func ParseUTocHeader(filepath string) (tr FIoStoreTocResourceInfo, err error) {
-	// remove possible extensions from the file
+func getBytesCompressionMethod() []byte {
+	// must be only one, which is zlib
+	buff := make([]byte, 32)
+	zlib := []byte("Zlib")
+	copy(buff, zlib)
+	return buff
+}
+
+func (d *FIoDirectoryIndexResource) getBytes() *[]byte {
+	buf := bytes.NewBuffer([]byte{})
+
+	dirCount := uint32(len(d.DirectoryEntries))
+	fileCount := uint32(len(d.FileEntries))
+	strCount := uint32(len(d.StringTable))
+	// mount point string
+	mountPointStr := stringToFString(string(d.MountPoint))
+	buf.Write(mountPointStr)
+
+	// directory entries
+	buf.Write(*uint32ToBytes(&dirCount))
+
+	for _, directoryEntry := range d.DirectoryEntries {
+		binary.Write(buf, binary.LittleEndian, directoryEntry)
+	}
+	buf.Write(*uint32ToBytes(&fileCount))
+	for _, fileEntry := range d.FileEntries {
+		binary.Write(buf, binary.LittleEndian, fileEntry)
+	}
+	buf.Write(*uint32ToBytes(&strCount))
+	for _, str := range d.StringTable {
+		buf.Write(stringToFString(string(str)))
+	}
+	data := buf.Bytes()
+	return &data
+}
+
+func readFileInfo(filepath string, parent *Directory, dat *UTocData) *FileInfo {
+	splitted := strings.Split(filepath, "/")
+	fname := splitted[len(splitted)-1]
+	chType := uint8(EIoChunkTypeBulkData)
+	if !strings.Contains(fname, ".uasset") {
+		chType = EIoChunkTypeOptionalBulkData
+	}
+
+	fileID := (*dat).FNameToID[fname]
+	dependency := (*dat).Deps.ChunkIDToDependencies[fileID]
+	deps := dependency.Dependencies
+	exports := dependency.ExportObjects
+
+	fdata, err := os.Stat(filepath)
+	if err != nil {
+		fmt.Println("err:", err)
+		return nil
+	}
+
+	newFile := FileInfo{
+		Name:          fname,
+		ID:            fileID,
+		chunkType:     chType,
+		Dependencies:  deps,
+		ExportObjects: exports,
+		someValue:     dependency.MostlyOne,
+		randomIndex:   dependency.SomeIndex,
+		Parent:        parent,
+		length:        uint64(fdata.Size()),
+	}
+
+	return &newFile
+}
+
+func constructFileTree(dirPath string, parent *Directory, data *UTocData) *Directory {
+	splitted := strings.Split(dirPath, "/")
+	thisDir := Directory{Name: splitted[len(splitted)-1], Parent: parent}
+
+	fs, err := ioutil.ReadDir(dirPath)
+	if err != nil {
+		fmt.Println("err:", err)
+		return nil
+	}
+	for _, file := range fs {
+		if file.IsDir() {
+			thisDir.ChildDirs = append(thisDir.ChildDirs, constructFileTree(dirPath+"/"+file.Name(), &thisDir, data))
+		} else {
+			// must be file
+			thisDir.Files = append(thisDir.Files, readFileInfo(dirPath+"/"+file.Name(), &thisDir, data))
+		}
+	}
+	return &thisDir
+}
+
+// PackDirectory builds the directory structure recursively of the entire directory
+// Then, it packs the retrieved structure into a UCAS/UTOC file combination.
+func PackDirectory(dirPath string) {
+	utocPath := dirPath + "../" + PackFileName + ".utoc"
+	ucasPath := dirPath + "../" + PackFileName + ".ucas"
+
+	// load the data first
+	data, err := loadParsedData()
+	if err != nil {
+		fmt.Println("err:", err)
+		return
+	}
+	// create root first
+	root := Directory{Name: MountPoint, Parent: nil}
+	fs, err := ioutil.ReadDir(dirPath)
+	if err != nil {
+		fmt.Println("err:", err)
+		return
+	}
+	for _, file := range fs {
+		if file.IsDir() {
+			root.ChildDirs = append(root.ChildDirs, constructFileTree(dirPath+"/"+file.Name(), &root, data))
+		} else {
+			// must be file
+			root.Files = append(root.Files, readFileInfo(dirPath+"/"+file.Name(), &root, data))
+		}
+	}
+
+	dirInfo := CasToc{ContainerID: data.Deps.ThisPackageID, Root: &root}
+	f, _ := os.OpenFile(ucasPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+
+	flattened, _ := dirInfo.Root.flatten()
+
+	fmt.Println("compressing files into .ucas file")
+	fmt.Println("number of files:", len(*flattened))
+	compressFilesToUcas(flattened, dirPath, f)
+
+	keepTheseDependencies := make(map[uint64]FileDependency)
+	for _, v := range *flattened {
+		keepTheseDependencies[v.ID] = data.Deps.ChunkIDToDependencies[v.ID]
+	}
+	data.Deps.ChunkIDToDependencies = keepTheseDependencies
+	// next up, the dependency file
+	depFile := data.Deps.Deparse()
+	depFileLength := uint64(len(*depFile))
+	depFileHash := *sha1Hash(depFile)
+
+	depFileBlocks := []FIoStoreTocCompressedBlockEntry{}
+	// now perform compression, write per compressed block
+	depFileData := *depFile
+	// now perform compression, write per compressed block
+	for len(depFileData) != 0 {
+		var chunk []byte
+		var block FIoStoreTocCompressedBlockEntry
+		chunkLen := len(depFileData)
+		if chunkLen > CompSize {
+			chunkLen = CompSize
+		}
+		chunk = depFileData[:chunkLen]
+		block.CompressionMethod = 1 // for zlib compression
+		currOffset, _ := f.Seek(0, os.SEEK_CUR)
+		block.SetOffset(uint64(currOffset))
+		block.SetUncompressedSize(uint32(chunkLen))
+
+		// actual compression
+		// This may not be 100% correct;
+		// comparing to the original ucas files, the zlib compression size differs slightly.
+		// the original files seem to always be an even number of bytes long
+		var b bytes.Buffer
+		w := zlib.NewWriter(&b)
+		w.Write(chunk)
+		w.Close()
+		compressedChunk := b.Bytes()
+		block.SetCompressedSize(uint32(len(compressedChunk)))
+		// align compessedChunk to 0x10
+		compressedChunk = append(compressedChunk, getRandomBytes((0x10-(len(compressedChunk)%0x10))&(0x10-1))...)
+		depFileData = depFileData[chunkLen:]
+		depFileBlocks = append(depFileBlocks, block)
+
+		f.Write(compressedChunk)
+	}
+	// ucas file has been fully written
+	f.Close()
+
+	var chid FIoChunkID
+	var offlen FIoOffsetAndLength
+	var meta FIoStoreTocEntryMeta
+
+	for i, entry := range *flattened {
+		chid.ID = entry.ID
+		chid.Type = entry.chunkType
+
+		if i == 0 {
+			offlen.SetOffset(0)
+		} else {
+			offset := data.Offlengths[i-1].GetOffset() + data.Offlengths[i-1].GetLength()
+			offset = ((offset + CompSize - 1) / CompSize) * CompSize // align to 0x1000
+			offlen.SetOffset(offset)
+
+		}
+		// offlen.SetOffset(entry.offset)
+		offlen.SetLength(entry.length)
+		meta.ChunkHash = entry.FileHash
+		meta.Flags = 1
+
+		data.IDs = append(data.IDs, chid)
+		data.Offlengths = append(data.Offlengths, offlen)
+		data.CBlocks = append(data.CBlocks, entry.blocks...)
+		data.Metas = append(data.Metas, meta)
+	}
+	// add data for the dependencies
+	chid.ID = data.Deps.ThisPackageID
+	chid.Type = 10 // special type!
+	offset := data.Offlengths[len(data.Offlengths)-1].GetOffset() + data.Offlengths[len(data.Offlengths)-1].GetLength()
+	offset = ((offset + CompSize - 1) / CompSize) * CompSize // align to 0x1000
+	offlen.SetOffset(offset)
+	offlen.SetLength(depFileLength)
+	meta.ChunkHash = depFileHash
+	meta.Flags = 1
+
+	data.IDs = append(data.IDs, chid)
+	data.Offlengths = append(data.Offlengths, offlen)
+	data.Metas = append(data.Metas, meta)
+
+	data.CBlocks = append(data.CBlocks, depFileBlocks...)
+
+	// all data is present, now ready for writing UTOC file
+	f, _ = os.OpenFile(utocPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+
+	data.writeUtocFile(f, dirInfo.Root)
+	f.Close()
+
+}
+
+// unpacks the directory inside the unpackPath; does NOT include the entire path to the root
+func (d *Directory) UnpackDirectory(openUCASfile *os.File, unpackPath string) {
+	os.MkdirAll(unpackPath, 0700)
+	for _, f := range d.Files {
+		b, err := f.decompress(openUCASfile)
+		if err != nil {
+			fmt.Println("err:", err)
+		}
+		err = os.WriteFile(unpackPath+"/"+f.Name, *b, 0644)
+		if err != nil {
+			fmt.Println("err:", err)
+		}
+	}
+	for _, dir := range d.ChildDirs {
+		// create child directory and unpack there
+		dir.UnpackDirectory(openUCASfile, unpackPath+"/"+dir.Name)
+	}
+}
+
+// traverses the path starting from the mountpoint (../../../) and returns the directory pointer
+func (ct *CasToc) PathToDirectory(path string) (*Directory, error) {
+	path = strings.TrimPrefix(path, MountPoint)
+	pathDirs := strings.Split(path, "/")
+
+	currDir := ct.Root
+	for _, dirName := range pathDirs {
+		if dirName == "" {
+			continue
+		}
+		found := false
+		for _, child := range currDir.ChildDirs {
+			if child.Name == dirName {
+				currDir = child
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, errors.New("could not find this path")
+		}
+	}
+
+	return currDir, nil
+}
+
+func ParseUTocFile(filepath string) (ct CasToc, err error) {
 	filepath = strings.TrimSuffix(filepath, ".utoc")
 	filepath = strings.TrimSuffix(filepath, ".ucas")
-	tr.filepath = filepath
-
-	b, err := ioutil.ReadFile(tr.filepath + ".utoc")
+	dat := UTocData{}
+	dat.FNameToID = make(map[string]uint64)
+	// read utoc file to be parsed
+	b, err := ioutil.ReadFile((filepath + ".utoc"))
 	if err != nil {
-		return
+		return ct, err
 	}
+	r := bytes.NewReader(b)
+
+	// read the header of the .utoc file
 	var hdr UTocHeader
-	err = binary.Read(bytes.NewReader(b), binary.LittleEndian, &hdr)
+	err = binary.Read(r, binary.LittleEndian, &hdr)
 	if err != nil {
-		return
+		return ct, err
 	}
 	if string(hdr.Magic[:]) != MagicUtoc {
-		err = ErrWrongMagic
-		return
+		return ct, ErrWrongMagic
 	}
-	if hdr.Version != VersionUtoc {
-		err = ErrUnknownUtocVersion
-		return
+	if hdr.Version < VersionUtoc {
+		fmt.Println("warning: this version is not supported by the packer/unpacker and may not work as intended")
 	}
-	// this "sanity check"
+	if hdr.Version != VersionUtoc && hdr.Version != LegacyUtoc {
+		return ct, ErrUnknownUtocVersion
+	}
 	if hdr.CompressedBlockEntrySize != 12 { // must be sizeof FIoStoreTocCompressedBlockEntry
-		err = ErrUnknownUtocVersion // didn't want to create a new error for just this...
-		return
+		return ct, ErrUnknownUtocVersion
 	}
+	ct.ContainerID = uint64(hdr.ContainerID)
 
-	// header properly read; now aggregate into a TocResourceInfo
-	tr.ChunkIDToIndex = make(map[FIoChunkID]uint32)
-	tr.TocFileSize = uint64(len(b) - binary.Size(tr.Header))
-	tr.Header = hdr
+	dat.BlockSize = hdr.CompressionBlockSize
 
-	// read chunk IDs
-	b = b[144:] // drop header from byte stream
+	// read Chunk IDs
 	var chunkID FIoChunkID
-	for i := 0; i < int(tr.Header.EntryCount); i++ {
-		binary.Read(bytes.NewReader(b), binary.LittleEndian, &chunkID)
-		tr.ChunkIDs = append(tr.ChunkIDs, chunkID)
-		b = b[binary.Size(chunkID):]
-	}
-	for i, id := range tr.ChunkIDs {
-		tr.ChunkIDToIndex[id] = uint32(i)
+	for i := 0; i < int(hdr.EntryCount); i++ {
+		binary.Read(r, binary.LittleEndian, &chunkID)
+		dat.IDs = append(dat.IDs, chunkID)
 	}
 
-	// chunk offsets
-	var offlength FIoOffsetAndLength
-	for i := 0; i < int(tr.Header.EntryCount); i++ {
-		binary.Read(bytes.NewReader(b), binary.LittleEndian, &offlength)
-		tr.Offlengths = append(tr.Offlengths, offlength)
-		b = b[binary.Size(offlength):]
+	// read offlengths
+	var offlen FIoOffsetAndLength
+	for i := 0; i < int(hdr.EntryCount); i++ {
+		binary.Read(r, binary.LittleEndian, &offlen)
+		dat.Offlengths = append(dat.Offlengths, offlen)
 	}
-	// Compression blocks
-	var compressionBlock FIoStoreTocCompressedBlockEntry
-	for i := 0; i < int(tr.Header.CompressedBlockEntryCount); i++ {
-		binary.Read(bytes.NewReader(b), binary.LittleEndian, &compressionBlock)
-		tr.CompressionBlocks = append(tr.CompressionBlocks, compressionBlock)
-		b = b[binary.Size(compressionBlock):]
+
+	// read compression blocks
+	var cBlock FIoStoreTocCompressedBlockEntry
+	for i := 0; i < int(hdr.CompressedBlockEntryCount); i++ {
+		binary.Read(r, binary.LittleEndian, &cBlock)
+		dat.CBlocks = append(dat.CBlocks, cBlock)
 	}
+
 	// compression methods
-	var compressionMethods []FName
-	compressionMethods = append(compressionMethods, FName("None"))
-	for i := 0; i < int(tr.Header.CompressionMethodNameCount); i++ {
-		compressionMethods = append(compressionMethods, FName(b[:tr.Header.CompressionMethodNameLength]))
-		b = b[tr.Header.CompressionMethodNameLength:]
-	}
+	var compressionMethods []string
+	compressionMethods = append(compressionMethods, "None")
 
+	method := make([]byte, hdr.CompressionMethodNameLength)
+	for i := 0; i < int(hdr.CompressionMethodNameCount); i++ {
+		binary.Read(r, binary.LittleEndian, &method)
+		compressionMethods = append(compressionMethods, string(bytes.Trim([]byte(method[:]), "\x00")))
+	}
 	// chunk block signatures;
 	indexedFlag := uint8(1 << 3)
 	// compressedFlag := uint8(1 << 0)
@@ -326,120 +808,45 @@ func ParseUTocHeader(filepath string) (tr FIoStoreTocResourceInfo, err error) {
 		return
 	}
 
-	directoryIndexBuffer := (b[:hdr.DirectoryIndexSize])
-	tr.DirectoryResource = *parseDirectoryBufferThing(&directoryIndexBuffer, tr.Header.DirectoryIndexSize)
-
-	b = b[hdr.DirectoryIndexSize:]
-
-	var meta FIoStoreTocEntryMeta
-	for i := 0; i < int(tr.Header.EntryCount); i++ {
-		binary.Read(bytes.NewReader(b), binary.LittleEndian, &meta)
-		tr.ChunkMetas = append(tr.ChunkMetas, meta)
-		b = b[binary.Size(meta):]
+	// define dependency index "file" and parse it to use in the directoryIndex
+	if hdr.Version != VersionUtoc {
+		fmt.Println("There is a problem with reading the dependency file, please contact menv at the Grounded Modding server on Discord!")
+		return
 	}
 
-	if len(b) != 0 {
-		err = ErrExpectedBytesRead
-	}
+	depfileIndex := len(dat.IDs) - 1 // In VersionUtoc, this is the last chunk
+	depfileBlocks := dat.CBlocks[dat.Offlengths[depfileIndex].GetOffset()/uint64(dat.BlockSize):]
 
-	// https://github.com/luvyana/val-scripts/blob/6eda8d745f2dded067e91e345e48cdb6b09a5e90/utils/UE4Parse/IO/IoStoreReader.py
-	// map chunk IDs to offlengths for easier access
-	tr.ChunkIDToOfflengths = make(map[FIoChunkID]FIoOffsetAndLength)
-
-	conUncompressedSize := uint64(tr.Header.CompressedBlockEntryCount) * uint64(tr.Header.CompressionBlockSize)
-	for i := 0; i < int(tr.Header.EntryCount); i++ {
-		if tr.Offlengths[i].GetOffset()+tr.Offlengths[i].GetLength() > conUncompressedSize {
-			err = ErrTocEntryBounds
-			break
-		}
-		tr.ChunkIDToOfflengths[tr.ChunkIDs[i]] = tr.Offlengths[i]
+	depfile := FileInfo{
+		Name:      "dependency file",
+		ID:        dat.IDs[depfileIndex].ID,
+		chunkType: dat.IDs[depfileIndex].Type,
+		offset:    dat.Offlengths[depfileIndex].GetOffset(),
+		length:    dat.Offlengths[depfileIndex].GetLength(),
+		blocks:    depfileBlocks,
 	}
-	return
-}
-
-// yes, these functions are repetitive.
-// However, it provides a more clear insight in the file format in the
-// WriteUTOC function.
-// Some of them are a bit more complex
-func (h *FIoStoreTocResourceInfo) writeChunkIDs(utoc *os.File) {
-	for _, chunkID := range h.ChunkIDs {
-		writeStructToFile(chunkID, utoc)
-	}
-}
-func (h *FIoStoreTocResourceInfo) writeOfflengths(utoc *os.File) {
-	for _, offlength := range h.Offlengths {
-		writeStructToFile(offlength, utoc)
-	}
-}
-func (h *FIoStoreTocResourceInfo) writeCompressionBlocks(utoc *os.File) {
-	for _, compressionBlock := range h.CompressionBlocks {
-		writeStructToFile(compressionBlock, utoc)
-	}
-}
-func (h *FIoStoreTocResourceInfo) writeCompressionMethods(utoc *os.File) {
-	// must be only one, which is zlib
-	// if h.Header.CompressionMethodCount is NOT 1, make sure to extend this to loop!
-	buff := make([]byte, h.Header.CompressionMethodNameLength)
-	zlib := []byte("Zlib")
-	copy(buff, zlib)
-	utoc.Write(buff)
-}
-
-func (h *FIoStoreTocResourceInfo) writeDirectoryIndex(utoc *os.File) {
-	dir := h.DirectoryResource
-	dirCount := uint32(len(dir.DirectoryEntries))
-	fileCount := uint32(len(dir.FileEntries))
-	strCount := uint32(len(dir.StringTable))
-	// mount point string
-	mountPointStr := stringToFString(string(dir.MountPoint))
-	utoc.Write(mountPointStr)
-
-	// directory entries
-
-	writeUint32ToFile(&dirCount, utoc)
-	for _, directoryEntry := range dir.DirectoryEntries {
-		writeStructToFile(directoryEntry, utoc)
-	}
-	writeUint32ToFile(&fileCount, utoc)
-	for _, fileEntry := range dir.FileEntries {
-		writeStructToFile(fileEntry, utoc)
-	}
-	writeUint32ToFile(&strCount, utoc)
-	for _, str := range dir.StringTable {
-		utoc.Write(stringToFString(string(str)))
-	}
-}
-
-func (h *FIoStoreTocResourceInfo) writeChunkMetas(utoc *os.File) {
-	for _, meta := range h.ChunkMetas {
-		writeStructToFile(meta, utoc)
-	}
-}
-
-func (h *FIoStoreTocResourceInfo) WriteTOC() {
-	// create clear utoc file
-	tocPath := h.filepath + "/../" + "packed_P.utoc"
-	os.Remove(tocPath)
-
-	f, err := os.OpenFile(tocPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.Open(filepath + ".ucas")
 	if err != nil {
-		fmt.Println("error:", err)
 		return
 	}
 	defer f.Close()
-
-	// write first static 144 bytes:
-	err = binary.Write(f, binary.LittleEndian, h.Header)
+	data, err := depfile.decompress(f)
 	if err != nil {
-		fmt.Println("ERROR:", err)
+		return
+	}
+	dat.Deps = ParseDependencies(*data)
+	ct.Root = parseDirectoryIndex(r, &dat)
+	// Chunk Metas
+	// These metas are in the utoc file, but they aren't really used for unpacking
+	var meta FIoStoreTocEntryMeta
+	metas := []FIoStoreTocEntryMeta{}
+
+	for i := 0; i < int(hdr.EntryCount); i++ {
+		binary.Read(r, binary.LittleEndian, &meta)
+		metas = append(metas, meta)
 	}
 
-	// write the rest of the file
-	h.writeChunkIDs(f)
-	h.writeOfflengths(f)
-	h.writeCompressionBlocks(f)
-	h.writeCompressionMethods(f)
-	h.writeDirectoryIndex(f)
-	h.writeChunkMetas(f)
-	// file written in full
+	// save additional data
+	saveParsedData(&dat)
+	return
 }

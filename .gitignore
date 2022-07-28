@@ -2,3 +2,4 @@
 /unpacked*/
 /test/
 test*
+*.bin

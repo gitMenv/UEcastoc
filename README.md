@@ -58,13 +58,16 @@ CHUNK_ID, total bytes: 12
 These identify one chunk. 
 As far as I know, the ID is invalid if the value is 0.
 Otherwise it seems to be random.
-I am not sure what the Index means.
+I am not sure what the Index means, as this value is always 0.
+Maybe this is relevant if the files are too large to be described by one chunk.
+In that case you can have multiple chunks describing a file, possibly with multiple indices, but this is all speculation.
 The Type field corresponds to the EIoChunkType of the unreal engine.
 The values I've seen are 2, 3 and 10.
 
 Value 2 means "BulkData" and is used to represent .uasset files.
 Value 3 means "OptionalBulkData" and is used to represent .ubulk files.
-The very first chunkID always has value 10, which means "PackageStoreEntry", but I have no clue what this represents.
+The .uasset files all have unique chunk IDs, whereas the .ubulk files have an ID that was already taken by a .uasset file.
+The very last chunkID always has value 10, which means "PackageStoreEntry", but I have no clue what this represents.
 The Unreal Engine code isn't too clear about it.
 I suspect that this has something to do with the FPackageStoreEntry struct.
 
@@ -144,10 +147,11 @@ The file entry indices point to the file entry in the FILE_INDEX_ENTRY array.
 
 ```
 CHUNK_META, total bytes: 33
-    byte {32}        - Hash of chunk (This is standard SHA1 hash)
+    byte {32}        - Hash of chunk (This is standard SHA1 hash of 20 bytes, with 12 bytes of padding)
     uint8 {1}        - Flags
 ```
 Possible flags are: NoneMetaFlag (0), CompressedMetaFlag (1), MemoryMappedMetaFlag (2)
+However, in the Grounded utoc file, the flag value is always 1.
 
 
 ____
@@ -167,10 +171,36 @@ depsFile HEADER, total bytes: 32
 The header is followed by an ORDERED list of Chunk IDs, of size _nID_. 
 The list is unique, and it contains all of the IDs that are present in the .utoc file.
 I suspect that this is done for performance, for quick searching.
+There's just one Chunk ID missing, and that's the thing with the chunk type being 10 (so the one that contains this "depsFile Format").
 
 The list is immediately followed by a uint32 value describing the size in bytes of the rest of the file.
 It excludes the trailling (8) zerobytes.
-The "rest of the file" seems to consist of some kind of data of which I'm not sure what it means yet, followed by yet another list of chunk IDs.
+
+The "rest of the file" consists of the following very interesting information.
+First, there are blocks of 32 bytes, with data that links .uasset files to other files.
+These are the connections that are made between dependencies, and they show how many exports each entry has.
+For every single ID that was provided in the previous part with the chunk IDs, there is a corresponding entry with this structure;
+
+```
+depsFile DEPENDENCIES, total bytes: 32
+    uint64 {8}      - File size (uncompressed)
+    uint32 {4}      - Number of Export Objects
+    uint32 {4}      - A number either 1, 2 or 3. Not sure what this means
+
+    uint64 {8}      - Index of some sort; unique and starting at 0, but skipping some numbers
+    uint32 {4}      - Number of Dependency Packages
+    uint32 {4}      - Offset to dependency packages
+```
+The list of these dependencies is followed by a long list of chunk IDs, which are in fact the dependencies.
+The offset in a dependency entry points to the start of such chunk ID, but these offsets are a bit tricky.
+This offset is taken from the specific offset entry, before reading the entry, so all offsets jump over the whole list.
+The number of dependency packages tells how far one must read!
+I think this could have been done a bit more efficiently, but unfortunately I didn't design this file format.
+
+The number of IDs in the dependency area can be calculated.
+The length of the "rest of the file" is known, which consists of a number of dependency-entries and the IDs.
+We know how many dependency-entries there are, so we can calculate how many IDs there are.
+The list of IDs is followed by 8 nullbytes, which dictates the end of the file.
 
 ____
 # UAsset File Format
@@ -188,31 +218,25 @@ It's just useful to split the two in some cases.
 
 The uasset header is divided into two parts; a constant file header (of size 64), and a variable sized part.
 After the complete .uasset header, the contents of the would be .uexp file starts.
+
+Note: most of this information is reverse-engineerd by looking at the information in the .ucas viewer linked before.
 ```
 UASSET HEADER, total bytes: 64
     uint64 {8}      - no idea what this is, but it is repeated twice
     uint64 {8}      - same as above
     uint32 {4}      - "Package Flags" (00 00 00 80) no idea what this does, but it's constant everywhere
-    uint32 {4}      - "total header size"?
-    uint32 {4}      - Names Directory Offset (points to nullbyte, so do + 1) (always 0x40, length of header)
+    uint32 {4}      - This is the total header size, if it were an old .uasset file, so it deviates
+    uint32 {4}      - Names Directory Offset (points to nullbyte, so do + 1) (always 0x40, length of this header)
     uint32 {4}      - NamesDirectory Length (in bytes)
-    uint32 {4}      - absolute pointer to the start of something else.
-    uint32 {4}      - some other value?
-    uint32 {4}      - offset in .uasset file to the "EXTRA INFO" part
-    uint32 {4} // 48 - 
-    byte {32}
-
+    uint32 {4}      - Unknown 1 (offset)
+    uint32 {4}      - length of unknown 1
+    uint32 {4}      - unknown 2 (offset)
+    uint32 {4}      - Export Objects offset
+    uint32 {4}      - Unknown 3 (offset)
+    uint32 {4}      - Dependency Packages offset (also duplicated in dependency file in .ucas)
+    uint64 {8}      - Dependency Package Size (in bytes)
 ```
-```
-EXTRA INFO
-    uint64 {8}      - "Total header size", it's not actually total header size though... It's something else.
-    uint64 {8}      - total file size of the .uexp part of the file
-    uint64 {8}      - offset of the current file name in the list of strings!
-
-```
-
-Looking at table_crafting_intermediatematerials.uasset file...
-
+Directly after the file header, there is one nullbyte, after which the name directory index is shown.
 
 ```
 NAMES DIRECTORY
@@ -221,9 +245,44 @@ for each name
     byte  {X}       - Name
     byte  {1}       - null terminator
 ```
+There is a huge area of data of which I don't know what it means.
+This makes it challenging to do modifications to it in a huge way.
+This data must be identified before the real modding begins.
+However, after this large chunk of unidentified data, a list of Export Objects is presented.
+
+First, there's a uint32 with the number of export objects that this file has.
+After this number, the list immediately starts.
 
 ```
-IMPORT DIRECTORY
-
-
+EXPORT OBJECTS
+    uint64 {8}      - Serial Offset 
+    uint64 {8}      - Serial Size
+    uint64 {8}      - Object Name Offset
+    uint64 {8}      - Class Name Offset
+    byte {40}       - this is still unidentified at this moment.
 ```
+These fields are listed as such in the .ucas viewer, but the numbers are agreeing!
+In any case, the offsets that are described is an integer describing the offset in the name directory, or the list of strings.
+
+After these export objects, there's another large chunk of unidentified data, followed by the dependencies.
+Similar to the export objects, it starts with a uint32 stating how many dependency entries there are.
+After this, the following dependencies are shown;
+```
+DEPENDENCY PACKAGE
+    uint64 {8}      - ID
+    uint32 {4}      - Number of Entries (?) // Not quite sure, it's often just 1, sometimes 2 and 3.
+    int32 {4}       - is present*
+    uint32 {4}      - mostly one // not sure what it is, but almost always 1.
+    
+    if (number of entries > 1){
+        uint32 {4 * (2 * (numberOfEntries - 1))}**
+    }
+```
+`*` If the value of "is present" is 0, then the ID listed is included in the current .ucas file.
+If this value is -1, it's not included in the current .ucas file.
+
+`**` If the number of entries is 2 or 3, there are more numbers defined.
+For every number larger than 1, there are two additional uint32 numbers in a dependency entry.
+
+It's quite clear that I am still not sure what all of the fields mean and how they relate to each other.
+However, after the list of the dependencies, the entire former .uexp file starts!
