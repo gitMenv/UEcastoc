@@ -568,6 +568,9 @@ func PackDirectory(dirPath string) {
 		fmt.Println("err:", err)
 		return
 	}
+	// the pacakge ID of the new package must be unique
+	// if not, it overrides the original resulting in errors.
+	data.Deps.ThisPackageID = 0xAAAAAAAAAA
 	// create root first
 	root := Directory{Name: MountPoint, Parent: nil}
 	fs, err := ioutil.ReadDir(dirPath)
@@ -646,6 +649,11 @@ func PackDirectory(dirPath string) {
 
 	for i, entry := range *flattened {
 		chid.ID = entry.ID
+		if chid.ID == data.Deps.ThisPackageID-1 {
+			fmt.Println("THISS HELPPPP")
+		} else {
+			fmt.Println("chidID:", chid.ID)
+		}
 		chid.Type = entry.chunkType
 
 		if i == 0 {

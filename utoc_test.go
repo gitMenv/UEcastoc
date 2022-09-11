@@ -23,7 +23,7 @@ func printDirectoryStructure(d *Directory, level int) {
 // It does NOT work for the entire unpacked file structure, but not sure why not,
 // as it does work for multiple files in a multi-level file structure.
 func TestPackDirectory(t *testing.T) {
-	PackDirectory("../Maine/")
+	PackDirectory("../Game/")
 }
 
 func TestDirectoryStructure(t *testing.T) {
@@ -37,8 +37,11 @@ func TestDirectoryStructure(t *testing.T) {
 // root directory and its subdirectories of the file to the desired folder.
 func TestParseUTocFile(t *testing.T) {
 	// path to the utoc/ucas files...
-	path := "path_to_groundedGame/Grounded/Maine/Content/Maine-WindowsNoEditor"
-	ct, _ := ParseUTocFile(path)
+	path := "C:/Program Files (x86)/Steam/steamapps/common/Grounded/Maine/Content/Paks/Maine-WindowsNoEditor"
+	ct, err := ParseUTocFile(path)
+	if err != nil {
+		fmt.Println("err:", err)
+	}
 	fmt.Println(ct.ContainerID)
 
 	// f, _ := os.Open(path + ".ucas")

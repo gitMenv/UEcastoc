@@ -75,10 +75,10 @@ func loadParsedData() (*UTocData, error) {
 
 	// check if files exist
 	if _, err := os.Stat(ParsedDataPath + "deps.json"); errors.Is(err, os.ErrNotExist) {
-		return nil, err
+		return nil, errors.New("file did not exist. Did you run the program with -ls first?")
 	}
 	if _, err := os.Stat(ParsedDataPath + "fileIDs.json"); errors.Is(err, os.ErrNotExist) {
-		return nil, err
+		return nil, errors.New("file did not exist. Did you run the program with -ls first?")
 	}
 
 	deps, err := os.ReadFile(ParsedDataPath + "deps.json")
