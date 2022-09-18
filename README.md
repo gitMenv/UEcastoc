@@ -226,18 +226,21 @@ UASSET HEADER, total bytes: 64
     uint64 {8}      - same as above
     uint32 {4}      - "Package Flags" (00 00 00 80) no idea what this does, but it's constant everywhere
     uint32 {4}      - This is the total header size, if it were an old .uasset file, so it deviates
-    uint32 {4}      - Names Directory Offset (points to nullbyte, so do + 1) (always 0x40, length of this header)
+    uint32 {4}      - Header Size
     uint32 {4}      - NamesDirectory Length (in bytes)
-    uint32 {4}      - Unknown 1 (offset)
-    uint32 {4}      - length of unknown 1
-    uint32 {4}      - unknown 2 (offset)
+    uint32 {4}      - String hashes offset
+    uint32 {4}      - Length of hashes (in bytes)
+    uint32 {4}      - Import Objects Offset
     uint32 {4}      - Export Objects offset
-    uint32 {4}      - Unknown 3 (offset)
+    uint32 {4}      - Some Export Object metadata offset or something? Not sure...
     uint32 {4}      - Dependency Packages offset (also duplicated in dependency file in .ucas)
     uint64 {8}      - Dependency Package Size (in bytes)
 ```
-Directly after the file header, there is one nullbyte, after which the name directory index is shown.
+The header indicates a lot of offsets of all the parts in the .uasset file.
+The remainder of this section highlights each of these parts in order.
+Sometimes, the header lists the length of a few parts, but I'm not sure why it does this, as all lengths can be inferred from the other offsets, except maybe the list of strings.
 
+Directly after the file header, there is one nullbyte, after which the name directory index is shown.
 ```
 NAMES DIRECTORY
 for each name
@@ -245,13 +248,27 @@ for each name
     byte  {X}       - Name
     byte  {1}       - null terminator
 ```
-There is a huge area of data of which I don't know what it means.
-This makes it challenging to do modifications to it in a huge way.
-This data must be identified before the real modding begins.
-However, after this large chunk of unidentified data, a list of Export Objects is presented.
+Due to the strings in the Names Directory being of different sizes, it is possible that the byte count is not aligned anymore.
+After the Names Directory, there are nullbytes to make it aligned to 8 bytes.
+This is probably done for performance reasons.
 
-First, there's a uint32 with the number of export objects that this file has.
-After this number, the list immediately starts.
+
+### String Hashes
+The names directory is followed by a list 64-bit hashes, representing the hashes of the strings.
+The very first value is the "AlgorithmID" of the hash.
+This value seems to be always `00 00 64 C1 00 00 00 00`, and this corresponds to the code in the [Unreal Engine](https://github.com/EpicGames/UnrealEngine/blob/46544fa5e0aa9e6740c19b44b0628b72e7bbd5ce/Engine/Source/Runtime/Core/Private/UObject/UnrealNames.cpp) (line 489)!
+The hashing algorithm is the CityHash64 algorithm, and it works on strings that were made to be lowercase.
+So to get the value, make the string lowercase and hash it with the CityHash64 algorithm.
+
+### Import Objects
+The list of string hashes is followed by a list of Import Object IDs.
+This is not the same as the file IDs, and I'm not sure what these values represent.
+Each value is 8 bytes, and if the import name is "None", the value is `0xFFFFFFFFFFFFFFFF`, or -1.
+Not sure what to do with this, but the number of entries correspond to the number of import objects in the ucas file viewer.
+
+### Export Objects
+The next area of the file, are Export Objects.
+These are stored in a specific file structure, shown below.
 
 ```
 EXPORT OBJECTS
@@ -261,11 +278,32 @@ EXPORT OBJECTS
     uint64 {8}      - Class Name Offset
     byte {40}       - this is still unidentified at this moment.
 ```
-These fields are listed as such in the .ucas viewer, but the numbers are agreeing!
+The fields that were used are mainly copied from the .ucas file viewer. 
+The unknown 40 bytes are still unidentified, but the number of bytes seem to be correct.
 In any case, the offsets that are described is an integer describing the offset in the name directory, or the list of strings.
 
-After these export objects, there's another large chunk of unidentified data, followed by the dependencies.
-Similar to the export objects, it starts with a uint32 stating how many dependency entries there are.
+I believe that each file has at least one ExportObject, being itself.
+Since it is the file itself, it says something about the file.
+The Serial Offset field is the exact same value as the "total header size" in the header of the file.
+Now in this new file format, this doesn't really hold anymore, as it differs from the regular file.
+However, the serial offset states where the .uexp portion of the file starts.
+The Serial Size also has great significance, as this is the length of the .uexp portion of the file.
+
+The object name offset and the class name offset probably have some use as well, but these probably refer to the old file format.
+Therefore, the offset is off and I'm not sure how to correct it right now.
+Changing files is probably mostly impacting the serial size and the serial offset, so I'll keep this as a mystery for now.
+
+### ExportObject metadata?
+The export objects are followed by a strange data structure.
+It first starts with a 64-bit number, which seems to have no relation to the rest.
+Afterwards, there is an enumeration of some kind of metadata to the export objects.
+The metadata consists of four 32-bit numbers, and there are exactly as many metadata entries as export objects.
+This is still a mystery, but I don't think I'll touch ExportObjects anyway.
+
+
+### Dependency packages
+After all export objects information, there is a list of dependency packages.
+It starts with a uint32 stating how many dependency entries there are.
 After this, the following dependencies are shown;
 ```
 DEPENDENCY PACKAGE
@@ -286,3 +324,9 @@ For every number larger than 1, there are two additional uint32 numbers in a dep
 
 It's quite clear that I am still not sure what all of the fields mean and how they relate to each other.
 However, after the list of the dependencies, the entire former .uexp file starts!
+
+### End of the header
+This concludes the .uasset header part of the file.
+There are quite some values that are still unknown to me.
+However, most of these values will probably not change based on the created mods.
+I can only hope that I know enough to do the most interesting stuff with!
