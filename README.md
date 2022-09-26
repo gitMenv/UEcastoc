@@ -266,6 +266,9 @@ This is not the same as the file IDs, and I'm not sure what these values represe
 Each value is 8 bytes, and if the import name is "None", the value is `0xFFFFFFFFFFFFFFFF`, or -1.
 Not sure what to do with this, but the number of entries correspond to the number of import objects in the ucas file viewer.
 
+In Helios' tool, the Import Objects correspond to the Linked Classes.
+
+
 ### Export Objects
 The next area of the file, are Export Objects.
 These are stored in a specific file structure, shown below.
@@ -282,9 +285,9 @@ The fields that were used are mainly copied from the .ucas file viewer.
 The unknown 40 bytes are still unidentified, but the number of bytes seem to be correct.
 In any case, the offsets that are described is an integer describing the offset in the name directory, or the list of strings.
 
-I believe that each file has at least one ExportObject, being itself.
-Since it is the file itself, it says something about the file.
-The Serial Offset field is the exact same value as the "total header size" in the header of the file.
+The part after the .uasset file header is built up from different ExportObjects.
+When there are multiple ExportObjects, they are consecutive, which the SerialOffset and sizes illustrate.
+For the very first ExportObject, the Serial Offset field is the exact same value as the "total header size" in the header of the file.
 Now in this new file format, this doesn't really hold anymore, as it differs from the regular file.
 However, the serial offset states where the .uexp portion of the file starts.
 The Serial Size also has great significance, as this is the length of the .uexp portion of the file.

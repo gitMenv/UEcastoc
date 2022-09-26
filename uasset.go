@@ -3,9 +3,13 @@ package uecastoc
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"strings"
+
+	"github.com/tenfyzhong/cityhash"
 )
 
 // The ucas file consists of .uasset files with a structure that differs from the original .uasset structure.
@@ -18,24 +22,24 @@ type UAssetHeader struct {
 	TotalHeaderSize          uint32    // of the original file header size; but that included the dependencies...
 	NamesDirectoryOffset     uint32    // points to nullbyte, so do +1
 	NamesDirectoryLength     uint32    // length is in bytes
-	UnknownOffset1           uint32    // always points to value of 00 00 64 C1
-	LengthOfUO1              uint32    // length includes the value of 00 00 64 C1
-	UnknownOffset2           uint32
+	NamesHashesOffset        uint32    // first entry is always the algorithm ID
+	NamesHashesLength        uint32    // length is in bytes
+	ImportObjectsOffset      uint32
 	ExportObjectsOffset      uint32 // offset to some extra header information
-	UnknownOffset3           uint32 // points to some memory, just store the either 24 or 32 bytes.
+	ExportMetaOffset         uint32 // points to some memory, just store the either 24 or 32 bytes.
 	DependencyPackagesOffset uint32 // first value is a uint32, number of dependency packages.
 	DependencyPackagesSize   uint64
 }
 
-// total bytes are variable
-type DependencyPackage struct {
-	ID              uint64
-	NumberOfEntries uint32 // not sure what this does exactly
-	IsPresent       int32
-	SomeValue       uint32 // mostly one, but sometimes 2
-	// depending on the NumberOfEntries, there are multiple entries here
-	ExtraEntries []uint32
-}
+// dependency packages will probably not change during modding
+// type DependencyPackage struct {
+// 	ID              uint64
+// 	NumberOfEntries uint32 // not sure what this does exactly
+// 	IsPresent       int32
+// 	SomeValue       uint32 // mostly one, but sometimes 2
+// 	// depending on the NumberOfEntries, there are multiple entries here
+// 	ExtraEntries []uint32
+// }
 
 // total bytes: 72
 type ExportObject struct {
@@ -46,14 +50,13 @@ type ExportObject struct {
 	OtherProperties  [40]byte
 }
 type UAssetResource struct {
-	Header             UAssetHeader
-	NamesDir           []string
-	ExportObjects      []ExportObject
-	DependencyPackages []DependencyPackage
-	// not sure what I have to do with these unknowns yet, just store for now
-	Unknown1 []byte
-	Unknown2 []byte
-	Unknown3 []byte
+	Header        UAssetHeader
+	NamesDir      []string
+	ExportObjects []ExportObject
+	// the rest of the file probably won't change in mods
+	ImportObjects      []byte
+	ExportMeta         []byte
+	DependencyPackages []byte
 }
 
 func (u *UAssetResource) PrintNamesDirectory() {
@@ -87,50 +90,28 @@ func parseExportObjects(exportObjectBuff *[]byte) *[]ExportObject {
 	return &exports
 }
 
-func parseDependencyPackages(depPackageBuff *[]byte) *[]DependencyPackage {
-	var packageCount uint32
-	var extraEntry uint32
-	var deps []DependencyPackage
-	var dep DependencyPackage
-
-	r := bytes.NewReader(*depPackageBuff)
-	// first, one uint32 is read stating the number of dependency packages
-	binary.Read(r, binary.LittleEndian, &packageCount)
-	for i := 0; uint32(i) < packageCount; i++ {
-		dep.ExtraEntries = []uint32{}
-
-		binary.Read(r, binary.LittleEndian, &dep.ID)
-		binary.Read(r, binary.LittleEndian, &dep.NumberOfEntries)
-		binary.Read(r, binary.LittleEndian, &dep.IsPresent)
-		binary.Read(r, binary.LittleEndian, &dep.SomeValue)
-
-		if dep.NumberOfEntries > 1 {
-			for extra := 0; uint32(extra) < dep.NumberOfEntries-1; extra++ {
-				// two entries per extra thing
-				for j := 0; j < 2; j++ {
-					binary.Read(r, binary.LittleEndian, &extraEntry)
-					dep.ExtraEntries = append(dep.ExtraEntries, extraEntry)
-				}
-			}
-		}
-		deps = append(deps, dep)
-	}
-	return &deps
+// hashes using CityHash64
+func hashString(s *string) (hash uint64) {
+	return cityhash.CityHash64([]byte(strings.ToLower(*s)))
 }
 
 // ParseUAssetFile takes a string and it expects the full .uasset file, including .uexp
 // If the .uexp isn't there, there might be problems.
+// Not all data must be parsed; only the parts that may be changed due to modding.
+// That's what I'm doing here.
 func ParseUAssetFile(path string) (uasset UAssetResource, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
 	}
 
+	// parse header
 	err = binary.Read(f, binary.LittleEndian, &uasset.Header)
 	if err != nil {
 		return
 	}
 
+	// parse names directory
 	namesBuffer := make([]byte, uasset.Header.NamesDirectoryLength)
 	f.Seek(int64(uasset.Header.NamesDirectoryOffset+1), io.SeekStart)
 	n, err := f.Read(namesBuffer)
@@ -139,23 +120,17 @@ func ParseUAssetFile(path string) (uasset UAssetResource, err error) {
 	}
 	uasset.NamesDir = *parseNamesDirectory(&namesBuffer)
 
-	uasset.Unknown1 = make([]byte, uasset.Header.LengthOfUO1)
-	f.Seek(int64(uasset.Header.UnknownOffset1), io.SeekStart)
+	// hashes of names can be calculated; parsing not strictly required
 
-	_, err = f.Read(uasset.Unknown1)
-	if err != nil {
-		return
-	}
-	f.Seek(int64(uasset.Header.UnknownOffset2), 0)
-	unknown2len := uasset.Header.ExportObjectsOffset - uasset.Header.UnknownOffset2
-	uasset.Unknown2 = make([]byte, unknown2len)
-
-	_, err = f.Read(uasset.Unknown2)
+	// import objects are unlikely to change; simply copy slice of bytes
+	uasset.ImportObjects = make([]byte, uasset.Header.ExportObjectsOffset-uasset.Header.ImportObjectsOffset)
+	f.Seek(int64(uasset.Header.ImportObjectsOffset), io.SeekStart)
+	_, err = f.Read(uasset.ImportObjects)
 	if err != nil {
 		return
 	}
 
-	exportLen := uasset.Header.UnknownOffset3 - uasset.Header.ExportObjectsOffset
+	exportLen := uasset.Header.ExportMetaOffset - uasset.Header.ExportObjectsOffset
 	f.Seek(int64(uasset.Header.ExportObjectsOffset), io.SeekStart)
 
 	exportObjectsBuff := make([]byte, exportLen)
@@ -165,29 +140,47 @@ func ParseUAssetFile(path string) (uasset UAssetResource, err error) {
 	}
 	uasset.ExportObjects = *parseExportObjects(&exportObjectsBuff)
 
-	unknown3len := uasset.Header.DependencyPackagesOffset - uasset.Header.UnknownOffset3
-	uasset.Unknown3 = make([]byte, unknown3len)
-	f.Seek(int64(uasset.Header.UnknownOffset3), io.SeekStart)
-
-	_, err = f.Read(uasset.Unknown3)
+	// don't know how to change the kind of metadata, just copy
+	uasset.ExportMeta = make([]byte, uasset.Header.DependencyPackagesOffset-uasset.Header.ExportMetaOffset)
+	f.Seek(int64(uasset.Header.ExportMetaOffset), io.SeekStart)
+	_, err = f.Read(uasset.ExportMeta)
 	if err != nil {
 		return
 	}
 
-	depPackageBuff := make([]byte, uasset.Header.DependencyPackagesSize)
+	// these are unlikely to change; copy
+	uasset.DependencyPackages = make([]byte, uasset.Header.DependencyPackagesSize)
 	f.Seek(int64(uasset.Header.DependencyPackagesOffset), io.SeekStart)
-	_, err = f.Read(depPackageBuff)
+	_, err = f.Read(uasset.DependencyPackages)
 	if err != nil {
 		return
 	}
-
-	uasset.DependencyPackages = *parseDependencyPackages(&depPackageBuff)
 
 	// the actual data starts after this area
 	uexpdataOffset := uint64(uasset.Header.DependencyPackagesOffset) + uasset.Header.DependencyPackagesSize
+	offsetCorrection := uint64(0)
+	if len(uasset.ExportObjects) > 0 {
+		offsetCorrection = uasset.ExportObjects[0].SerialOffset - uexpdataOffset
+	}
+	for _, v := range uasset.ExportObjects {
+		fmt.Printf("range %d - %d\n", v.SerialOffset-offsetCorrection, v.SerialOffset+v.SerialSize-offsetCorrection)
+	}
 
 	f.Seek(int64(uexpdataOffset), io.SeekStart)
-	uasset.PrintNamesDirectory()
+	finfo, _ := f.Stat()
+	uexpData := make([]byte, uint64(finfo.Size())-uexpdataOffset)
+
+	_, err = f.Read(uexpData)
+	if err != nil {
+		return
+	}
+	f.Close()
+	v := uasset.ParseUexp(&uexpData)
+
+	jsonbytes, _ := json.MarshalIndent(v, "", "  ")
+	fmt.Println(string(jsonbytes))
+	fmt.Println("Length of this list:", len(v))
+	// uasset.PrintNamesDirectory()
 	return
 
 }
