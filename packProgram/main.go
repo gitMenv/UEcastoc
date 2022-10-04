@@ -126,6 +126,9 @@ func main() {
 		}
 		dirpath := os.Args[2]
 		fmt.Println("packing directory:", dirpath, "into Packed_P.ucas and Packed_P.utoc")
+		os.Remove(dirpath + "../Packed_P.ucas")
+		os.Remove(dirpath + "../Packed_P.utoc")
+
 		castoc.PackDirectory(dirpath)
 
 	case "ls":
