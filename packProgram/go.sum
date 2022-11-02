@@ -1,4 +1,6 @@
-github.com/gitMenv/UEcastoc v0.0.0-20220728211119-12b5ad3ace13 h1:H3SSCCUOlNAN6qg/eawwDrQ21IDMy9e5F6+U1CAcffY=
-github.com/gitMenv/UEcastoc v0.0.0-20220728211119-12b5ad3ace13/go.mod h1:QmDyxlZopNnd+1OfjRr0pPLgB/lTamOg8aQyDRa+X/M=
 github.com/gitMenv/UEcastoc v0.0.0-20220918154103-a9371b9f5f8f h1:5Sb3/dD4tMrkMoGX3ujjfRphaUqv7XQT6BLQ/TxnOHM=
 github.com/gitMenv/UEcastoc v0.0.0-20220918154103-a9371b9f5f8f/go.mod h1:QmDyxlZopNnd+1OfjRr0pPLgB/lTamOg8aQyDRa+X/M=
+github.com/gitMenv/UEcastoc v0.0.0-20221102065612-8ff34dc4bc2b h1:homnBMDPeSuVCE3U2CmfojMnL4QAPbRKZtBMtZXATVA=
+github.com/gitMenv/UEcastoc v0.0.0-20221102065612-8ff34dc4bc2b/go.mod h1:r3LOUPIzTPlIClszKknXVrHb3aFEo1Jz5IyjyCpKYXw=
+github.com/tenfyzhong/cityhash v0.0.0-20181130044406-4c2731b5918c h1:Y3PUeYj+OuuOy7BnbIvtGOj9YDKjPHsZyN/2AJqN32s=
+github.com/tenfyzhong/cityhash v0.0.0-20181130044406-4c2731b5918c/go.mod h1:Izvvi9mFtnF9nbPc2Z/gazIliNnYtxOsbQnFYpmxbfc=
