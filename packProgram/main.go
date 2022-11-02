@@ -1,5 +1,10 @@
 package main
 
+// Note: This program should be interpreted as a showcase for the castoc project.
+// It is only here to show what the program can do and will probably not work 100% of the time.
+// I am working on a similar project that achieves the same things, but then with a GUI for more convenience.
+// This will take a while, so for now you can use this :D
+
 import (
 	"errors"
 	"fmt"
@@ -18,7 +23,7 @@ var (
 	helpMessages []helpMessage = []helpMessage{
 		{"h", "displays this help message"},
 		{"ls", "<filepath> lists the files packed inside a .ucas file specified by the <filepath>. Works best when writing to a file"},
-		{"u", "<filepath> <subdirectory*> unpacks the subdirectory (or root if none provided) of the .ucas file and exports it in the current directory."},
+		{"u", "<filepath> <subdirectory> unpacks the subdirectory (or root if none provided) of the .ucas file and exports it in the current directory."},
 		{"p", "<dirpath> packs the specified directory into a .ucas/.utoc file; NOTE: requires the execution of either the -ls or -u command with a valid .ucas file first!"},
 	}
 )

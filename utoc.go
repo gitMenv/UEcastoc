@@ -417,7 +417,7 @@ func recursiveExplorer(parent *Directory, pDir uint32, strTable *[]string, dirs 
 			Dependencies:  dat.Deps.ChunkIDToDependencies[dat.IDs[fileEntry.UserData].ID].Dependencies,
 			ExportObjects: dat.Deps.ChunkIDToDependencies[dat.IDs[fileEntry.UserData].ID].ExportObjects,
 		}
-		dat.FNameToID[newFile.Name] = newFile.ID
+		dat.FNameToID[newFile.getFilePath("")] = newFile.ID
 		parent.Files = append(parent.Files, &newFile)
 		fileIdx = fileEntry.NextFileEntry
 	}
@@ -509,8 +509,9 @@ func readFileInfo(filepath string, parent *Directory, dat *UTocData) *FileInfo {
 	if !strings.Contains(fname, ".uasset") {
 		chType = EIoChunkTypeOptionalBulkData
 	}
+	tmpFinfo := FileInfo{Name: fname, Parent: parent}
 
-	fileID := (*dat).FNameToID[fname]
+	fileID := (*dat).FNameToID[tmpFinfo.getFilePath("")]
 	dependency := (*dat).Deps.ChunkIDToDependencies[fileID]
 	deps := dependency.Dependencies
 	exports := dependency.ExportObjects
@@ -649,11 +650,6 @@ func PackDirectory(dirPath string) {
 
 	for i, entry := range *flattened {
 		chid.ID = entry.ID
-		if chid.ID == data.Deps.ThisPackageID-1 {
-			fmt.Println("THISS HELPPPP")
-		} else {
-			fmt.Println("chidID:", chid.ID)
-		}
 		chid.Type = entry.chunkType
 
 		if i == 0 {

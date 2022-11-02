@@ -29,6 +29,7 @@ func TestPackDirectory(t *testing.T) {
 }
 
 func TestDirectoryStructure(t *testing.T) {
+	// this is the path to my Grounded game .ucas file
 	path := "C:/Program Files (x86)/Steam/steamapps/common/Grounded/Maine/Content/Paks/Maine-WindowsNoEditor"
 	ct, _ := ParseUTocFile(path)
 	printDirectoryStructure(ct.Root, 2)
@@ -63,16 +64,10 @@ func TestParseUTocFile(t *testing.T) {
 // This is far from done and still requires a lot of work.
 func TestUASSET(t *testing.T) {
 	// in this case, I was simply looking at the BP_SurvivalPlayerCharacter uasset file
-	path := "C:/Users/Menno/Desktop/Modding/Go/unpacked3/Maine/Content/Blueprints/Items/CraftingTables/Table_Crafting_Equipment.uasset"
-	// path := "C:/Users/Menno/Desktop/Modding/Go/unpacked3/Maine/Content/Blueprints/Items/Table_AllItems.uasset"
+	path := "./packProgram/unpacked/Maine/Content/Blueprints/Items/CraftingTables/Table_Crafting_Equipment.uasset"
 
 	src, err := ParseUAssetFile(path)
-	// fmt.Println("there are the following \"ExportObjects\"")
-	// for i, v := range src.ExportObjects {
-	// 	fmt.Println("block", i)
-	// 	fmt.Println("	name number:", v.ObjectNameOffset)
-	// 	fmt.Printf("	range [%d - %d]\n", v.SerialOffset, v.SerialOffset+v.SerialSize)
-	// }
+
 	if err != nil {
 		fmt.Println("err:", err)
 		return
@@ -81,15 +76,11 @@ func TestUASSET(t *testing.T) {
 }
 
 func TestCityhash(t *testing.T) {
-	// just testing the cityhash
+	// just testing the cityhash; it works
 	value := []byte("datatable")
 	hash := cityhash.CityHash64(value)
 	fmt.Println("hash  :", hash)
-	fmt.Println("should:", 8206203013534831085)
+	fmt.Println("should:", 8151526992271999536)
 	fmt.Printf("hex       : 0x%X\n", hash)
-	fmt.Printf("should HEX: 0x%X\n", 8206203013534831085)
+	fmt.Printf("should HEX: 0x%X\n", 8151526992271999536)
 }
-
-// webWoven voor intermediateMaterials: 1393408675175398950
-// webWoven voor table_craftingTools:   1393408675175398950
-// 13 56 61 ce b6 c6 fe 00

@@ -1,5 +1,8 @@
 /files/
-/unpacked*/
+*/unpacked*/
 /test/
 test*
 *.bin
+/.idea/
+Runtime/*
+packProgram/Runtime/
