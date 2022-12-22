@@ -4,14 +4,24 @@ This document shows the file format of utoc files, and they show their relation 
 This has been reverse engineered based on the game files of Grounded, and the source code of the Unreal Engine.
 That being said, let's dive right into it.
 
+The UTOC struct is made up of the following properties:
+FIoStoreTocHeader - Header
+int64 - TocFileSize
+TArray<FIoChunkId> ChunkIds
+TMap<FIoChunkId, int32> ChunkIdToIndex
+TArray<FIoStoreTocCompressedBlockEntry> CompressionBlocks
+TArray<FIoStoreTocEntryMeta> ChunkMetas
+TArray<FName> CompressionMethods    
+
+
 First the header:
 For any extra data structure used in the header, an indent is made.
 Everything in the file is Little Endian.
 ```
-FILE HEADER, total bytes: 144
+FILE HEADER (FIoStoreTocHeader), total bytes: 144
     uint8 {1}[16]           - static expression of 16 bits for MAGIC word (string: "-==--==--==--==-") 
-    uint8 {1}          - Version - Current options are Initial(1), DirectoryIndex(2), PartitionSize(3)
-    uint8 + uint16      - Reserved/Padding
+    uint8 {1}           - Version - Current options are Initial(1), DirectoryIndex(2), PartitionSize(3)
+    uint8 + uint16 {3}  - Reserved/Padding
     uint32 {4}          - Header Size (144)
     uint32 {4}          - Entry Count
     uint32 {4}          - Count of Compressed Blocks 
@@ -29,9 +39,13 @@ FILE HEADER, total bytes: 144
         uint32 {4}      - D
     uint8 {1}           - Container flags - uint8 bitmask enum - see https://docs.unrealengine.com/5.1/en-US/API/Runtime/Core/IO/EIoContainerFlags/
     uint8 + uint16      - Reserved/Padding caused by bitmask
-    uint8 [60]          - static expression of 60 bytes of padding - "partition size" is among them as well, but seems unused...
+    uint8 [60]          - static 60 bytes of padding - "partition size" is among them as well, but seems unused...
 ```
-
+Following the header the total TOC file size is serialized:
+```
+    int64 {4}           - TOC File Size
+```
+    
 Based on the header, there are several number of data structures parsed.
 The way in which these data structures are parsed and how often they occur are listed here, in the form: "(data structure): {name of variable}"
 The individual data structures can be found below.
@@ -51,13 +65,13 @@ ________
 Data structures:
 
 ```
-CHUNK_ID, total bytes: 12
+CHUNK_ID, total bytes: 12 - Hash made up of 12 uint8 bytes
     uint64 {8}          - ID
     uint16 {2}          - Index // seems to be always 0
     uint8  {1}          - Padding // making it 0x10 aligned
-    uint8  {1}          - Type
+    uint8  {1}          - Type - See: https://docs.unrealengine.com/4.26/en-US/API/Runtime/Core/IO/EIoChunkType/ 
 ```
-These identify one chunk. 
+This hash identifies one chunk. 
 As far as I know, the ID is invalid if the value is 0.
 Otherwise it seems to be random.
 I am not sure what the Index means, as this value is always 0.
