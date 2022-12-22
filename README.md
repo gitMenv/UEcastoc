@@ -248,7 +248,7 @@ After the complete .uasset header, the contents of the would be .uexp file start
 Note: most of this information is reverse-engineerd by looking at the information in the .ucas viewer linked before.
 ```
 UASSET HEADER, total bytes: 64
-    uint64 {8}      - Name in FMappedName format
+    uint64 {8}      - Name in FMappedName format.  See https://docs.unrealengine.com/5.0/en-US/API/Runtime/Core/Serialization/FMappedName/
     uint64 {8}      - SourceName in FMappedName format
     uint32 {4}      - "Package Flags" Generally constant at (00 00 00 80).  See https://docs.unrealengine.com/5.1/en-US/API/Runtime/CoreUObject/UObject/EPackageFlags/ 
     uint32 {4}      - CookedHeaderSize - This is the total header size, if it were an old .uasset file, so it deviates
