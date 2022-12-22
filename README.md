@@ -5,6 +5,8 @@ This has been reverse engineered based on the game files of Grounded, and the so
 That being said, let's dive right into it.
 
 The UTOC struct is made up of the following properties:
+
+```
 FIoStoreTocHeader - Header
 int64 - TocFileSize
 TArray<FIoChunkId> ChunkIds
@@ -12,7 +14,7 @@ TMap<FIoChunkId, int32> ChunkIdToIndex
 TArray<FIoStoreTocCompressedBlockEntry> CompressionBlocks
 TArray<FIoStoreTocEntryMeta> ChunkMetas
 TArray<FName> CompressionMethods    
-
+```
 
 First the header:
 For any extra data structure used in the header, an indent is made.
