@@ -13,7 +13,7 @@ TArray<FIoChunkId> ChunkIds
 TMap<FIoChunkId, int32> ChunkIdToIndex
 TArray<FIoStoreTocCompressedBlockEntry> CompressionBlocks
 TArray<FIoStoreTocEntryMeta> ChunkMetas
-TArray<FName> CompressionMethods    
+TArray<FName> Compression
 ```
 
 First the header:
@@ -128,6 +128,14 @@ COMPRESSION_BLOCK, total bytes: 12
 Read offset as uint64, with only lower 5 bytes set.
 The others should be read as uint32, with only the lower 3 bytes set.
 The compression method is interpreted as an index in the list of compression method names.
+
+```Compression Method Names
+NAME_Zlib
+NAME_Gzip
+NAME_LZ4
+"Bogus"
+"Oodle"
+```
 
 The offset is an offset in the .ucas field, and it is always 16-aligned.
 The compression block size is the length of the data in the .ucas field.
