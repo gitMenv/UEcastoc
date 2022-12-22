@@ -222,19 +222,20 @@ After the complete .uasset header, the contents of the would be .uexp file start
 Note: most of this information is reverse-engineerd by looking at the information in the .ucas viewer linked before.
 ```
 UASSET HEADER, total bytes: 64
-    uint64 {8}      - no idea what this is, but it is repeated twice
-    uint64 {8}      - same as above
-    uint32 {4}      - "Package Flags" (00 00 00 80) no idea what this does, but it's constant everywhere
-    uint32 {4}      - This is the total header size, if it were an old .uasset file, so it deviates
-    uint32 {4}      - Header Size
-    uint32 {4}      - NamesDirectory Length (in bytes)
-    uint32 {4}      - String hashes offset
-    uint32 {4}      - Length of hashes (in bytes)
-    uint32 {4}      - Import Objects Offset
-    uint32 {4}      - Export Objects offset
-    uint32 {4}      - Some Export Object metadata offset or something? Not sure...
-    uint32 {4}      - Dependency Packages offset (also duplicated in dependency file in .ucas)
-    uint64 {8}      - Dependency Package Size (in bytes)
+    uint64 {8}      - Name in FMappedName format
+    uint64 {8}      - SourceName in FMappedName format
+    uint32 {4}      - "Package Flags" Generally constant at (00 00 00 80).  See https://docs.unrealengine.com/5.1/en-US/API/Runtime/CoreUObject/UObject/EPackageFlags/ 
+    uint32 {4}      - CookedHeaderSize - This is the total header size, if it were an old .uasset file, so it deviates
+    int32 {4}      - Name Map Offset
+    int32 {4}      - Name Map Size (in bytes)
+    int32 {4}      - Name Map Hashes offset
+    int32 {4}      - Name Map Hashes Size (in bytes)
+    int32 {4}      - Import Map Offset
+    int32 {4}      - Export Map offset
+    int32 {4}      - Export Bundles Offset
+    int32 {4}      - Graph Data Offset / Dependency Packages offset (also duplicated in dependency file in .ucas)
+    int32 {4}      - Graph Data Size / Dependency Package Size (in bytes)
+    int32 {4}      - Padding
 ```
 The header indicates a lot of offsets of all the parts in the .uasset file.
 The remainder of this section highlights each of these parts in order.
