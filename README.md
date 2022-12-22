@@ -9,8 +9,9 @@ For any extra data structure used in the header, an indent is made.
 Everything in the file is Little Endian.
 ```
 FILE HEADER, total bytes: 144
-    byte {16}           - utoc MAGIC word (string: "-==--==--==--==-") 
-    uint32 {4}          - Version, (2) (actually an 8-bit number, with three bytes reserved afterwards)
+    uint8 {1}[16]           - static expression of 16 bits for MAGIC word (string: "-==--==--==--==-") 
+    uint8 {1}          - Version - Current options are Initial(1), DirectoryIndex(2), PartitionSize(3)
+    uint8 + uint16      - Reserved/Padding
     uint32 {4}          - Header Size (144)
     uint32 {4}          - Entry Count
     uint32 {4}          - Count of Compressed Blocks 
@@ -26,8 +27,9 @@ FILE HEADER, total bytes: 144
         uint32 {4}      - B
         uint32 {4}      - C
         uint32 {4}      - D
-    uint8 {1}           - Container flags
-    byte {63}           - reserved, padding, and "partition size" is among them as well, but seems unused...
+    uint8 {1}           - Container flags - uint8 bitmask enum - see https://docs.unrealengine.com/5.1/en-US/API/Runtime/Core/IO/EIoContainerFlags/
+    uint8 + uint16      - Reserved/Padding caused by bitmask
+    uint8 [60]          - static expression of 60 bytes of padding - "partition size" is among them as well, but seems unused...
 ```
 
 Based on the header, there are several number of data structures parsed.
