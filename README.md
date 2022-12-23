@@ -4,13 +4,26 @@ This document shows the file format of utoc files, and they show their relation 
 This has been reverse engineered based on the game files of Grounded, and the source code of the Unreal Engine.
 That being said, let's dive right into it.
 
+The UTOC struct is made up of the following properties:
+
+```
+FIoStoreTocHeader - Header
+int64 - TocFileSize
+TArray<FIoChunkId> ChunkIds
+TMap<FIoChunkId, int32> ChunkIdToIndex
+TArray<FIoStoreTocCompressedBlockEntry> CompressionBlocks
+TArray<FIoStoreTocEntryMeta> ChunkMetas
+TArray<FName> Compression
+```
+
 First the header:
 For any extra data structure used in the header, an indent is made.
 Everything in the file is Little Endian.
 ```
-FILE HEADER, total bytes: 144
-    byte {16}           - utoc MAGIC word (string: "-==--==--==--==-") 
-    uint32 {4}          - Version, (2) (actually an 8-bit number, with three bytes reserved afterwards)
+FILE HEADER (FIoStoreTocHeader), total bytes: 144
+    uint8 {1}[16]           - static expression of 16 bits for MAGIC word (string: "-==--==--==--==-") 
+    uint8 {1}           - Version - Current options are Initial(1), DirectoryIndex(2), PartitionSize(3)
+    uint8 + uint16 {3}  - Reserved/Padding
     uint32 {4}          - Header Size (144)
     uint32 {4}          - Entry Count
     uint32 {4}          - Count of Compressed Blocks 
@@ -26,10 +39,15 @@ FILE HEADER, total bytes: 144
         uint32 {4}      - B
         uint32 {4}      - C
         uint32 {4}      - D
-    uint8 {1}           - Container flags
-    byte {63}           - reserved, padding, and "partition size" is among them as well, but seems unused...
+    uint8 {1}           - Container flags - uint8 bitmask enum - see https://docs.unrealengine.com/5.1/en-US/API/Runtime/Core/IO/EIoContainerFlags/
+    uint8 + uint16      - Reserved/Padding caused by bitmask
+    uint8 [60]          - static 60 bytes of padding - "partition size" is among them as well, but seems unused...
 ```
-
+Following the header the total TOC file size is serialized:
+```
+    int64 {4}           - TOC File Size
+```
+    
 Based on the header, there are several number of data structures parsed.
 The way in which these data structures are parsed and how often they occur are listed here, in the form: "(data structure): {name of variable}"
 The individual data structures can be found below.
@@ -49,13 +67,13 @@ ________
 Data structures:
 
 ```
-CHUNK_ID, total bytes: 12
+CHUNK_ID, total bytes: 12 - Hash made up of 12 uint8 bytes
     uint64 {8}          - ID
     uint16 {2}          - Index // seems to be always 0
     uint8  {1}          - Padding // making it 0x10 aligned
-    uint8  {1}          - Type
+    uint8  {1}          - Type - See: https://docs.unrealengine.com/4.26/en-US/API/Runtime/Core/IO/EIoChunkType/ 
 ```
-These identify one chunk. 
+This hash identifies one chunk. 
 As far as I know, the ID is invalid if the value is 0.
 Otherwise it seems to be random.
 I am not sure what the Index means, as this value is always 0.
@@ -110,6 +128,14 @@ COMPRESSION_BLOCK, total bytes: 12
 Read offset as uint64, with only lower 5 bytes set.
 The others should be read as uint32, with only the lower 3 bytes set.
 The compression method is interpreted as an index in the list of compression method names.
+
+```Compression Method Names
+NAME_Zlib
+NAME_Gzip
+NAME_LZ4
+"Bogus"
+"Oodle"
+```
 
 The offset is an offset in the .ucas field, and it is always 16-aligned.
 The compression block size is the length of the data in the .ucas field.
@@ -222,19 +248,20 @@ After the complete .uasset header, the contents of the would be .uexp file start
 Note: most of this information is reverse-engineerd by looking at the information in the .ucas viewer linked before.
 ```
 UASSET HEADER, total bytes: 64
-    uint64 {8}      - no idea what this is, but it is repeated twice
-    uint64 {8}      - same as above
-    uint32 {4}      - "Package Flags" (00 00 00 80) no idea what this does, but it's constant everywhere
-    uint32 {4}      - This is the total header size, if it were an old .uasset file, so it deviates
-    uint32 {4}      - Header Size
-    uint32 {4}      - NamesDirectory Length (in bytes)
-    uint32 {4}      - String hashes offset
-    uint32 {4}      - Length of hashes (in bytes)
-    uint32 {4}      - Import Objects Offset
-    uint32 {4}      - Export Objects offset
-    uint32 {4}      - Some Export Object metadata offset or something? Not sure...
-    uint32 {4}      - Dependency Packages offset (also duplicated in dependency file in .ucas)
-    uint64 {8}      - Dependency Package Size (in bytes)
+    uint64 {8}      - Name in FMappedName format.  See https://docs.unrealengine.com/5.0/en-US/API/Runtime/Core/Serialization/FMappedName/
+    uint64 {8}      - SourceName in FMappedName format
+    uint32 {4}      - "Package Flags" Generally constant at (00 00 00 80).  See https://docs.unrealengine.com/5.1/en-US/API/Runtime/CoreUObject/UObject/EPackageFlags/ 
+    uint32 {4}      - CookedHeaderSize - This is the total header size, if it were an old .uasset file, so it deviates
+    int32 {4}      - Name Map Offset
+    int32 {4}      - Name Map Size (in bytes)
+    int32 {4}      - Name Map Hashes offset
+    int32 {4}      - Name Map Hashes Size (in bytes)
+    int32 {4}      - Import Map Offset
+    int32 {4}      - Export Map offset
+    int32 {4}      - Export Bundles Offset
+    int32 {4}      - Graph Data Offset / Dependency Packages offset (also duplicated in dependency file in .ucas)
+    int32 {4}      - Graph Data Size / Dependency Package Size (in bytes)
+    int32 {4}      - Padding
 ```
 The header indicates a lot of offsets of all the parts in the .uasset file.
 The remainder of this section highlights each of these parts in order.
