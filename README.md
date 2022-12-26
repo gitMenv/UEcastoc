@@ -283,7 +283,7 @@ This is probably done for performance reasons.
 ### String Hashes
 The names directory is followed by a list 64-bit hashes, representing the hashes of the strings.
 The very first value is the "AlgorithmID" of the hash.
-This value seems to be always `00 00 64 C1 00 00 00 00`, and this corresponds to the code in the [Unreal Engine](https://github.com/EpicGames/UnrealEngine/blob/46544fa5e0aa9e6740c19b44b0628b72e7bbd5ce/Engine/Source/Runtime/Core/Private/UObject/UnrealNames.cpp) (line 489)!
+This value seems to be always `00 00 64 C1 00 00 00 00`, and this corresponds to this line of code in the [Unreal Engine source code](https://github.com/EpicGames/UnrealEngine/blob/d8c1ecd52eb4728637881c550b39794afed78db3/Engine/Source/Runtime/Core/Private/UObject/UnrealNames.cpp#L748).
 The hashing algorithm is the CityHash64 algorithm, and it works on strings that were made to be lowercase.
 So to get the value, make the string lowercase and hash it with the CityHash64 algorithm.
 
