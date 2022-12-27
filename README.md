@@ -316,7 +316,6 @@ EXPORT OBJECTS
     byte {2}                     - Padding
 ```
 The fields that were used are mainly copied from the .ucas file viewer. 
-The unknown 40 bytes are still unidentified, but the number of bytes seem to be correct.
 In any case, the offsets that are described is an integer describing the offset in the name directory, or the list of strings.
 
 The part after the .uasset file header is built up from different ExportObjects.
