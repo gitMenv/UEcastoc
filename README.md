@@ -302,11 +302,18 @@ These are stored in a specific file structure, shown below.
 
 ```
 EXPORT OBJECTS
-    uint64 {8}      - Serial Offset 
-    uint64 {8}      - Serial Size
-    uint64 {8}      - Object Name Offset
-    uint64 {8}      - Class Name Offset
-    byte {40}       - this is still unidentified at this moment.
+    uint64 {8}                   - Cooked Serial Offset
+    uint64 {8}                   - Cooked Serial Size
+    FMappedName {4}              - Object Name
+    FPackageObjectIndex {8}      - Outer Index
+    FPackageObjectIndex {8}      - Class Index
+    FPackageObjectIndex {8}      - Super Index
+    FPackageObjectIndex {8}      - Template Index
+    FPackageObjectIndex {8}      - Global Import Index
+    uint64 {8}                   - Public Export Hash
+    EObjectFlags {1}             - Object Flags
+    EExportFilterFlags {1}       - Client/Server Flags
+    byte {2}                     - Padding
 ```
 The fields that were used are mainly copied from the .ucas file viewer. 
 The unknown 40 bytes are still unidentified, but the number of bytes seem to be correct.
