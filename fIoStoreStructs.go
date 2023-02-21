@@ -1,6 +1,10 @@
-package uecastoc
+package main
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"fmt"
+	"strconv"
+)
 
 type FIoContainerID uint64
 type FIoStoreTocEntryMetaFlags uint8
@@ -27,10 +31,106 @@ type FIoFileIndexEntry struct {
 }
 
 type FIoChunkID struct {
-	ID      uint64
-	Index   uint16
-	Padding uint8
-	Type    uint8
+	ID      uint64 // 8 bytes
+	Index   uint16 // 2 bytes
+	Padding uint8  // 1 byte
+	Type    uint8  // 1 byte
+}
+
+type DirIndexWrapper struct {
+	dirs     *[]*FIoDirectoryIndexEntry
+	files    *[]*FIoFileIndexEntry
+	strTable *map[string]int
+	strSlice *[]string
+}
+
+func (r *FIoDirectoryIndexEntry) AddFile(fpathSections []string, fIndex uint32, structure *DirIndexWrapper) {
+	if len(fpathSections) == 0 {
+		return
+	}
+	if len(fpathSections) == 1 {
+		// only one item, add file and return; base case
+		fname := fpathSections[0]
+		newFile := FIoFileIndexEntry{
+			Name:          uint32((*(*structure).strTable)[fname]),
+			NextFileEntry: NoneEntry,
+			UserData:      fIndex,
+		}
+		newEntryIndex := uint32(len(*(*structure).files))
+		*(*structure).files = append(*(*structure).files, &newFile)
+
+		if (*r).FirstFileEntry == NoneEntry {
+			(*r).FirstFileEntry = newEntryIndex
+		} else {
+			fentry := &(*(*structure).files)[(*r).FirstFileEntry]
+			// filenames (with their path) are unique and will always be added
+			for (*fentry).NextFileEntry != NoneEntry {
+				fentry = &(*(*structure).files)[(*fentry).NextFileEntry]
+			}
+			(*fentry).NextFileEntry = newEntryIndex
+		}
+		return
+	}
+	// recursive case; find directory if present, otherwise add.
+	var currDir *FIoDirectoryIndexEntry
+	currDirName := fpathSections[0]
+	currDirNameIndex := uint32((*(*structure).strTable)[currDirName])
+
+	possibleNewEntryIndex := uint32(len(*(*structure).dirs))
+	if (*r).FirstChildEntry == NoneEntry {
+		newDirEntry := FIoDirectoryIndexEntry{
+			Name:             currDirNameIndex,
+			FirstChildEntry:  NoneEntry,
+			NextSiblingEntry: NoneEntry,
+			FirstFileEntry:   NoneEntry,
+		}
+		(*r).FirstChildEntry = possibleNewEntryIndex
+		*(*structure).dirs = append(*(*structure).dirs, &newDirEntry)
+		currDir = &newDirEntry
+	} else {
+		dentry := &(*(*structure).dirs)[(*r).FirstChildEntry]
+
+		for (*dentry).Name != currDirNameIndex {
+			if (*dentry).NextSiblingEntry != NoneEntry {
+				dentry = &(*(*structure).dirs)[(*dentry).NextSiblingEntry]
+			} else {
+				break
+			}
+		}
+		if (*dentry).Name == currDirNameIndex {
+			// directory found
+			currDir = (*dentry)
+		} else {
+			// add new directory
+			newDirEntry := FIoDirectoryIndexEntry{
+				Name:             currDirNameIndex,
+				FirstChildEntry:  NoneEntry,
+				NextSiblingEntry: NoneEntry,
+				FirstFileEntry:   NoneEntry,
+			}
+			(*dentry).NextSiblingEntry = possibleNewEntryIndex
+			*(*structure).dirs = append(*(*structure).dirs, &newDirEntry)
+			currDir = &newDirEntry
+		}
+	}
+	(*currDir).AddFile(fpathSections[1:], fIndex, structure)
+}
+
+func (c *FIoChunkID) ToHexString() string {
+	return fmt.Sprintf("%016x%04x%02x%02x", c.ID, c.Index, c.Padding, c.Type)
+}
+
+func FromHexString(s string) FIoChunkID {
+	var c FIoChunkID
+	v, _ := strconv.ParseUint(s[:16], 16, 64)
+	c.ID = uint64(v)
+	idx, _ := strconv.ParseUint(s[16:20], 16, 16)
+	c.Index = uint16(idx)
+	b, _ := strconv.ParseUint(s[20:22], 16, 8)
+	c.Padding = uint8(b)
+	b, _ = strconv.ParseUint(s[22:], 16, 8)
+	c.Type = uint8(b)
+	return c
 }
 
 type FIoStoreTocCompressedBlockEntry struct {
@@ -63,7 +163,6 @@ func (f *FIoOffsetAndLength) GetOffset() uint64 {
 		(uint64(f.Offset[2]) << 16) |
 		(uint64(f.Offset[1]) << 24) |
 		(uint64(f.Offset[0]) << 32)
-	// return binary.LittleEndian.Uint64(normalize(f.Offset[:]))
 }
 func (f *FIoOffsetAndLength) GetLength() uint64 {
 	return uint64(f.Length[4]) |
