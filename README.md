@@ -10,6 +10,9 @@ Therefore, I've decided to make this a DLL for Windows, so that you can still us
 The focus of this DLL is to create packing/unpacking support for Unreal Engine games with an API that is usable.
 This API is documented below
 
+## Would you like to support me?
+You can donate using this [link](https://www.paypal.com/donate/?hosted_button_id=VLFVGJ749MQCC).
+
 ## Core Features of DLL
 
 This section lists the core features that this DLL will support.
