@@ -16,7 +16,7 @@ void printHelp() {
     cout << "  list [utocPath, *AES key]: lists all files that are packed in the .utoc/.ucas file" << endl;
     cout << "  unpackAll [utocPath, ucasPath, outputDir, *AES key]: unpack entire .utoc/.ucas files" << endl;
     cout << "  unpack [utocPath, ucasPath, outputDir, regex, *AES key]: unpack .utoc/.ucas files based on regex" << endl;
-    cout << "  manifest [utocPath, ucasPath, outputManifest]: creates Manifest file of this .utoc/.ucas file" << endl; 
+    cout << "  manifest [utocPath, ucasPath, outputManifest, *AES key]: creates Manifest file of this .utoc/.ucas file" << endl; 
     cout << "  pack [packDir, manifestPath, outputFile, compressionMethod, *AES key]: pack directory into .utoc/.ucas file" << endl;
     cout << endl;
     cout << "the pack command requires the manifest file, and it packs the input dir to the outputFile{.utoc, .ucas, .pak}; three files are created!" << endl;
@@ -109,18 +109,23 @@ void unpack(vector<string> args){
 }
 
 void manifest(vector<string> args){
-    //[utocPath, ucasPath, outputManifest]
-    if(args.size() != 3) {
-        cout << "expecting exactly 3 arguments for creating a manifest file" << endl;
+    //[utocPath, ucasPath, outputManifest, aeskey]
+    if(args.size() < 3) {
+        cout << "expecting at least 3 arguments for creating a manifest file" << endl;
         printHelp();
         return;
     }
     const char* utocPath = args[0].c_str();
     const char* ucasPath = args[1].c_str();
     const char* outputManifest = args[2].c_str();
+    char* aeskey = NULL;
+    if (args.size() == 4) {
+        const char* aes = args[3].c_str();
+    }
     int n = createManifestFile(const_cast<char*>(utocPath),
         const_cast<char*>(ucasPath),
-        const_cast<char*>(outputManifest));
+        const_cast<char*>(outputManifest),
+        aeskey);
     if (n < 0){
         cout << getError() << endl;
     }

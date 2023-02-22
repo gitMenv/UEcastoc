@@ -77,7 +77,7 @@ extern __declspec(dllexport) int packGameFiles(char* dirPath, char* manifestPath
 extern __declspec(dllexport) void freeStringList(char** stringlist, int n);
 extern __declspec(dllexport) char** listGameFiles(char* utocFile, int* n, char* AESKey);
 extern __declspec(dllexport) char* getError();
-extern __declspec(dllexport) int createManifestFile(char* utocFile, char* ucasFile, char* outputFile);
+extern __declspec(dllexport) int createManifestFile(char* utocFile, char* ucasFile, char* outputFile, char* AESKey);
 extern __declspec(dllexport) int unpackAllGameFiles(char* utocFile, char* ucasFile, char* outputDirectory, char* AESKey);
 extern __declspec(dllexport) int unpackGameFiles(char* utocFile, char* ucasFile, char* outputDirectory, char* regex, char* AESKey);
 

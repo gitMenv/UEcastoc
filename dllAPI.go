@@ -96,16 +96,43 @@ func getError() (err *C.char) {
 }
 
 //export createManifestFile
-func createManifestFile(utocFile *C.char, ucasFile *C.char, outputFile *C.char) C.int {
+func createManifestFile(utocFile *C.char, ucasFile *C.char, outputFile *C.char, AESKey *C.char) C.int {
 	//TODO: check if the "dependencies" part works for more games, and if it's even required.
 	utocFname := C.GoString(utocFile)
 	ucasFname := C.GoString(ucasFile)
 	outputFname := C.GoString(outputFile)
+	aes := convertAES(AESKey)
 
-	d, err := parseUtocFile(utocFname, []byte{})
+	d, err := parseUtocFile(utocFname, aes)
 	if err != nil {
 		staticErr = err.Error()
 		return C.int(-1)
+	}
+	
+	if d.hdr.isEncrypted(){
+		tmpFile, err := os.CreateTemp("", "tmp")
+		if err != nil {
+			staticErr = err.Error()
+			return C.int(-1)
+		}
+		ucasBytes, err := ioutil.ReadFile(ucasFname)
+		if err != nil {
+			staticErr = err.Error()
+			return C.int(-1)
+		}
+		decryptedBytes, err := decryptAES(&ucasBytes, aes)
+		if err != nil {
+			staticErr = err.Error()
+			return C.int(-1)
+		}
+		tmpFile.Write(*decryptedBytes)
+		ucasFname = tmpFile.Name()
+		err = tmpFile.Close()
+		if err != nil {
+			fmt.Println("err:", err)
+			return C.int(-1)
+		}
+		defer os.Remove(tmpFile.Name())
 	}
 	manifest, err := d.constructManifest(ucasFname)
 	if err != nil {
