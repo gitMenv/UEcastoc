@@ -67,7 +67,7 @@ void unpackAll(vector<string> args){
     char* aeskey = NULL;
     if (args.size() == 4) {
         const char* aes = args[3].c_str();
-        
+        aeskey = const_cast<char*>(aes);
     }
     int n = unpackAllGameFiles(const_cast<char*>(utocPath), 
         const_cast<char*>(ucasPath), 
@@ -95,6 +95,7 @@ void unpack(vector<string> args){
     char* aeskey = NULL;
     if (args.size() == 5) {
         const char* aes = args[4].c_str();
+        aeskey = const_cast<char*>(aes);
     }
     int n = unpackGameFiles(const_cast<char*>(utocPath), 
         const_cast<char*>(ucasPath), 
@@ -121,6 +122,7 @@ void manifest(vector<string> args){
     char* aeskey = NULL;
     if (args.size() == 4) {
         const char* aes = args[3].c_str();
+        aeskey = const_cast<char*>(aes);
     }
     int n = createManifestFile(const_cast<char*>(utocPath),
         const_cast<char*>(ucasPath),
