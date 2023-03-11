@@ -106,7 +106,7 @@ This function takes the game directory that you are packing, which should follow
 The outFile is simply a path to a (new) filename, without any extension. 
 The filename is used to create the .utoc, .ucas and .pak files in the path that you specify.
 
-Three compression methods are currently known; "None", "Zlib" or "Oodle".
+Three compression methods are currently known; "None", "Zlib", "Oodle" or "lz4".
 None is the default, so when NULL is passed, it will not be compressed.
 Any other compression method will return errors; the names are not case-sensitive.
 If you wish to encrypt the created files, you could provide an AES key, but I am pretty sure Unreal Engine won't be able to decrypt your files.

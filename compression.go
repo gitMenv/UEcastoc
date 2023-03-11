@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"compress/zlib"
 	"errors"
+	"io"
 	"io/ioutil"
 	"strings"
 
 	"github.com/new-world-tools/go-oodle"
+	"github.com/pierrec/lz4/v4"
 )
 
 // implemented (de)compression methods (lowercased)
@@ -17,11 +19,13 @@ var (
 		"none":  decompressNone,
 		"zlib":  decompressZLIB,
 		"oodle": decompressOodle,
+		"lz4":   decompressLZ4,
 	}
 	CompressionMethods = map[string](func(*[]byte) (*[]byte, error)){
 		"none":  compressNone,
 		"zlib":  compressZLIB,
 		"oodle": compressOodle, // settings: level 3 Kraken compression
+		"lz4":   compressLZ4,
 	}
 )
 
@@ -58,6 +62,17 @@ func decompressOodle(inData *[]byte, expectedOutputSize uint32) (*[]byte, error)
 	// if err is not nil, it's handled by the caller
 	return &output, err
 }
+func decompressLZ4(inData *[]byte, expectedOutputSize uint32) (*[]byte, error) {
+	reader := bytes.NewReader(*inData)
+	decompressed := &bytes.Buffer{}
+	zr := lz4.NewReader(reader)
+	_, err := io.Copy(decompressed, zr)
+	if err != nil {
+		return nil, err
+	}
+	decomp := decompressed.Bytes()
+	return &decomp, nil
+}
 
 /* Compression functions */
 
@@ -83,6 +98,22 @@ func compressOodle(inData *[]byte) (*[]byte, error) {
 	// https://docs.unrealengine.com/4.27/en-US/TestingAndOptimization/Oodle/Data/
 	compressedData, err := oodle.Compress(*inData, oodle.AlgoKraken, oodle.CompressionLevelOptimal3)
 	return &compressedData, err
+}
+
+func compressLZ4(inData *[]byte) (*[]byte, error) {
+	reader := bytes.NewReader(*inData)
+	compressed := &bytes.Buffer{}
+	lzwriter := lz4.NewWriter(compressed)
+	_, err := io.Copy(lzwriter, reader)
+	if err != nil {
+		return nil, err
+	}
+	// Closing is *very* important
+	if err := lzwriter.Close(); err != nil {
+		return nil, err
+	}
+	comp := compressed.Bytes()
+	return &comp, nil
 }
 
 /* Wrapper for getting the functions */
