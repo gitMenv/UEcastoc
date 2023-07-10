@@ -337,17 +337,30 @@ func parseUtocFile(utocFile string, aesKey []byte) (*UTocData, error) {
 		binary.Read(r, binary.LittleEndian, &meta)
 		metas = append(metas, meta)
 	}
-
+	//temporary dependency "file" because it isn't always the last chunk
+	var deps GameFileMetaData
 	// aggregate file data
 	for i, v := range filepaths {
 		startBlock := offlengths[i].GetOffset() / uint64(udata.hdr.CompressionBlockSize)
 		// hacky way of rounding the length to the next multiple of the compressionblocksize and intcasting
 		endBlock := startBlock + (offlengths[i].GetLength()+(uint64(udata.hdr.CompressionBlockSize)-1))/uint64(udata.hdr.CompressionBlockSize)
+		blocks := compressionBlocks[startBlock:endBlock]
 		// if the name is empty, don't include it here either!
 		if v == "" {
+			// check for "dependencies" chunk via type instead of assuming it's last.
+			// in the sample im running this on, the chunkID matches with the one in the header.
+			if chunkIDs[i].Type == 10 && uint64(udata.hdr.ContainerID) == chunkIDs[i].ID {
+				//fmt.Println("found dependencies match:", )
+				deps = GameFileMetaData{
+					filepath:          DepFileName,
+					chunkID:           chunkIDs[i],
+					offlen:            offlengths[i],
+					compressionBlocks: blocks,
+					metadata:          metas[i],
+				}
+			}
 			continue
 		}
-		blocks := compressionBlocks[startBlock:endBlock]
 		udata.files = append(udata.files, GameFileMetaData{
 			filepath:          v,
 			chunkID:           chunkIDs[i],
@@ -356,15 +369,11 @@ func parseUtocFile(utocFile string, aesKey []byte) (*UTocData, error) {
 			metadata:          metas[i],
 		})
 	}
-
+	if deps.filepath == "" {
+		return &udata, errors.New("couldn't find dependencies")
+	}
 	// the final file in the list will have filepath "dependencies"
-	udata.files = append(udata.files, GameFileMetaData{
-		filepath:          DepFileName,
-		chunkID:           chunkIDs[len(udata.files)],
-		offlen:            offlengths[len(udata.files)],
-		compressionBlocks: compressionBlocks[(offlengths[len(udata.files)].GetOffset() / uint64(udata.hdr.CompressionBlockSize)):],
-		metadata:          metas[len(udata.files)],
-	})
-
+	//manually stick this on at the end for compatibility?
+	udata.files = append(udata.files, deps)
 	return &udata, nil
 }
