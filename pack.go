@@ -30,6 +30,7 @@ func listFilesInDir(dir string, pathToChunkID *map[string]FIoChunkID) (*[]GameFi
 		if err != nil {
 			return err
 		}
+		fmt.Println("mountedpath: ", mountedPath)
 		mountedPath = strings.TrimPrefix(mountedPath, dir)
 		mountedPath = strings.ReplaceAll(mountedPath, "\\", "/") // ensure path dividors are as expected and not Windows
 		var offlen FIoOffsetAndLength
@@ -44,6 +45,7 @@ func listFilesInDir(dir string, pathToChunkID *map[string]FIoChunkID) (*[]GameFi
 			chunkID:  chidData,
 			offlen:   offlen,
 		}
+		fmt.Println("trimmed: ", mountedPath)
 		files = append(files, newEntry)
 		return nil
 	})
@@ -253,7 +255,7 @@ func constructUtocFile(files *[]GameFileMetaData, compression string, AESKey []b
 		// should be the right type for this container/dependencies/whatever-its-called-chunk
 		if v.chunkID.Type == 10 {
 			containerIndex = i
-			fmt.Println("containerIndex:", containerIndex)
+			// fmt.Println("containerIndex:", containerIndex)
 		}
 	}
 
@@ -331,23 +333,42 @@ func constructUtocFile(files *[]GameFileMetaData, compression string, AESKey []b
 
 // returns the GameFileMetaData of the dependencies file
 func packToCasToc(dir string, m *Manifest, outFilename string, compression string, aes []byte) (int, error) {
-	// map for quick lookup
-	pathToChunkID := make(map[string]FIoChunkID)
+
+	var offlen FIoOffsetAndLength
+	var fdata []GameFileMetaData
+	var newEntry GameFileMetaData
 	for _, v := range (*m).Files {
-		pathToChunkID[v.Filepath] = FromHexString(v.ChunkID)
+		var p string = filepath.Join(dir, v.Filepath)
+		if info, err := os.Stat(p); err == nil {
+			// fmt.Println("exists", v.Filepath)
+			offlen.SetLength(uint64(info.Size()))
+		} else if errors.Is(err, os.ErrNotExist) && v.Filepath == DepFileName {
+			//dependencies file doesnt exist, but still needs to be parsed so add it here anyways!
+			// fmt.Println("exin't", v.Filepath)
+			offlen.SetLength(0) //will be fixed in a later function
+		}
+		newEntry = GameFileMetaData{
+			filepath: v.Filepath,
+			chunkID:  FromHexString(v.ChunkID),
+			offlen:   offlen,
+		}
+		fdata = append(fdata, newEntry)
 	}
+
+	// fmt.Printf("%+v\n", pathToChunkID)
 	// first aggregate flat list of all the files that are in the dir
 	// the resulting slice must keep its indices structure.
-	fdata, err := listFilesInDir(dir, &pathToChunkID)
-	if err != nil {
-		return 0, err
-	}
-	// read each file and place them in a newly created .ucas file with the desired compression method
-	// get the required data such as compression sizes and hashes;
-	// err = packFilesToUcas(fdata, m, dir, outFilename, compression)
+	// fdata, err := listFilesInDir(dir, &pathToChunkID)
 	// if err != nil {
 	// 	return 0, err
 	// }
+
+	// read each file and place them in a newly created .ucas file with the desired compression method
+	// get the required data such as compression sizes and hashes;
+	err := packFilesToUcas(&fdata, m, dir, outFilename, compression)
+	if err != nil {
+		return 0, err
+	}
 
 	// .ucas file has been written now; encrypt with aes if desired (why would you?)
 	if len(aes) != 0 {
@@ -366,10 +387,10 @@ func packToCasToc(dir string, m *Manifest, outFilename string, compression strin
 	}
 
 	// .utoc file must be generated, especially the directory index, which is the hardest part.
-	utocBytes, err := constructUtocFile(fdata, compression, aes)
+	utocBytes, err := constructUtocFile(&fdata, compression, aes)
 	if err != nil {
 		return 0, err
 	}
 	err = os.WriteFile(outFilename+".utoc", *utocBytes, os.ModePerm)
-	return len(*fdata), err
+	return len(fdata), err
 }
