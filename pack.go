@@ -4,16 +4,15 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"math/rand"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 const (
 	CompSize              = 0x10000 // default size of a compression block. Haven't seen any others
-	PackUtocVersion       = 3
+	PackUtocVersion       = 3       //3 is PartitionSize, 2 is DirectoryIndex according to https://github.com/FabianFG/CUE4Parse/blob/master/CUE4Parse/UE4/IO/Objects/FIoStoreTocHeader.cs
 	CompressionNameLength = 32
 )
 
@@ -31,6 +30,7 @@ func listFilesInDir(dir string, pathToChunkID *map[string]FIoChunkID) (*[]GameFi
 		if err != nil {
 			return err
 		}
+		fmt.Println("mountedpath: ", mountedPath)
 		mountedPath = strings.TrimPrefix(mountedPath, dir)
 		mountedPath = strings.ReplaceAll(mountedPath, "\\", "/") // ensure path dividors are as expected and not Windows
 		var offlen FIoOffsetAndLength
@@ -45,6 +45,7 @@ func listFilesInDir(dir string, pathToChunkID *map[string]FIoChunkID) (*[]GameFi
 			chunkID:  chidData,
 			offlen:   offlen,
 		}
+		fmt.Println("trimmed: ", mountedPath)
 		files = append(files, newEntry)
 		return nil
 	})
@@ -57,7 +58,25 @@ func listFilesInDir(dir string, pathToChunkID *map[string]FIoChunkID) (*[]GameFi
 //  - compresses all the files as specified
 //  - records all metadata of packing, required for the program.
 //  - writes the compressed files to the .ucas file - not yet encrypted!
-func packFilesToUcas(files *[]GameFileMetaData, dir string, outFilename string, compression string) error {
+func packFilesToUcas(files *[]GameFileMetaData, m *Manifest, dir string, outFilename string, compression string) error {
+
+	/* manually add the "dependencies" section here */
+	// only include the dependencies that are present
+	subsetDependencies := make(map[uint64]FileDependency)
+	for _, v := range *files {
+		// all values are ChunkIDs
+		subsetDependencies[v.chunkID.ID] = (*m).Deps.ChunkIDToDependencies[v.chunkID.ID]
+	}
+	(*m).Deps.ChunkIDToDependencies = subsetDependencies
+
+	// find uint64 of depfile
+	depHexString := ""
+	for _, v := range (*m).Files {
+		if v.Filepath == DepFileName {
+			depHexString = v.ChunkID
+		}
+	}
+
 	compMethodNumber := uint8(0)
 	if strings.ToLower(compression) != "none" {
 		compMethodNumber = 1
@@ -78,8 +97,17 @@ func packFilesToUcas(files *[]GameFileMetaData, dir string, outFilename string, 
 
 	for i := 0; i < len(*files); i++ {
 		b, err := os.ReadFile(dir + (*files)[i].filepath)
-		if err != nil {
+
+		// sorry, this is a little cursed
+		if err != nil && (*files)[i].filepath != DepFileName {
 			return err
+		}
+		// if the file doesnt exist, but the filepath indicates it's the dependency file...
+		if (*files)[i].filepath == DepFileName {
+			// attempt to deparse, fix filepath, set chunkid
+			b = *(*m).Deps.Deparse()
+			(*files)[i].filepath = ""
+			(*files)[i].chunkID = FromHexString(depHexString)
 		}
 		(*files)[i].offlen.SetLength(uint64(len(b)))
 		if i == 0 {
@@ -121,6 +149,7 @@ func packFilesToUcas(files *[]GameFileMetaData, dir string, outFilename string, 
 			// write chunk to the new .ucas file
 			f.Write(compressedChunk)
 		}
+		fmt.Println("Packed: ", (*files)[i].filepath)
 	}
 	return nil
 }
@@ -218,8 +247,16 @@ func constructUtocFile(files *[]GameFileMetaData, compression string, AESKey []b
 		newContainerFlags |= uint8(EncryptedContainerFlag)
 	}
 	compressedBlocksCount := uint32(0)
-	for _, v := range *files {
+	var containerIndex int
+	// fmt.Printf("%+v\n", files)
+	for i, v := range *files {
 		compressedBlocksCount += uint32(len(v.compressionBlocks))
+		// fmt.Println("containerIndex:", v.chunkID.Type)
+		// should be the right type for this container/dependencies/whatever-its-called-chunk
+		if v.chunkID.Type == 10 {
+			containerIndex = i
+			// fmt.Println("containerIndex:", containerIndex)
+		}
 	}
 
 	dirIndexBytes := deparseDirectoryIndex(files)
@@ -242,7 +279,7 @@ func constructUtocFile(files *[]GameFileMetaData, compression string, AESKey []b
 		CompressionMethodNameLength: CompressionNameLength,
 		CompressionBlockSize:        CompSize,
 		DirectoryIndexSize:          uint32(len(*dirIndexBytes)), // number of bytes in the dirIndex
-		ContainerID:                 FIoContainerID((*files)[len(*files)-1].chunkID.ID),
+		ContainerID:                 FIoContainerID((*files)[containerIndex].chunkID.ID),
 		ContainerFlags:              EIoContainerFlags(newContainerFlags),
 		PartitionSize:               0xffffffffffffffff,
 		PartitionCount:              1,
@@ -296,106 +333,42 @@ func constructUtocFile(files *[]GameFileMetaData, compression string, AESKey []b
 
 // returns the GameFileMetaData of the dependencies file
 func packToCasToc(dir string, m *Manifest, outFilename string, compression string, aes []byte) (int, error) {
-	// map for quick lookup
-	pathToChunkID := make(map[string]FIoChunkID)
+
+	var offlen FIoOffsetAndLength
+	var fdata []GameFileMetaData
+	var newEntry GameFileMetaData
 	for _, v := range (*m).Files {
-		pathToChunkID[v.Filepath] = FromHexString(v.ChunkID)
+		var p string = filepath.Join(dir, v.Filepath)
+		if info, err := os.Stat(p); err == nil {
+			// fmt.Println("exists", v.Filepath)
+			offlen.SetLength(uint64(info.Size()))
+		} else if errors.Is(err, os.ErrNotExist) && v.Filepath == DepFileName {
+			//dependencies file doesnt exist, but still needs to be parsed so add it here anyways!
+			// fmt.Println("exin't", v.Filepath)
+			offlen.SetLength(0) //will be fixed in a later function
+		}
+		newEntry = GameFileMetaData{
+			filepath: v.Filepath,
+			chunkID:  FromHexString(v.ChunkID),
+			offlen:   offlen,
+		}
+		fdata = append(fdata, newEntry)
 	}
+
+	// fmt.Printf("%+v\n", pathToChunkID)
 	// first aggregate flat list of all the files that are in the dir
 	// the resulting slice must keep its indices structure.
-	fdata, err := listFilesInDir(dir, &pathToChunkID)
-	if err != nil {
-		return 0, err
-	}
+	// fdata, err := listFilesInDir(dir, &pathToChunkID)
+	// if err != nil {
+	// 	return 0, err
+	// }
 
 	// read each file and place them in a newly created .ucas file with the desired compression method
 	// get the required data such as compression sizes and hashes;
-	err = packFilesToUcas(fdata, dir, outFilename, compression)
+	err := packFilesToUcas(&fdata, m, dir, outFilename, compression)
 	if err != nil {
 		return 0, err
 	}
-
-	/* manually add the "dependencies" section here */
-	// only include the dependencies that are present
-	subsetDependencies := make(map[uint64]FileDependency)
-	for _, v := range *fdata {
-		// all values are ChunkIDs
-		subsetDependencies[v.chunkID.ID] = (*m).Deps.ChunkIDToDependencies[v.chunkID.ID]
-	}
-	(*m).Deps.ChunkIDToDependencies = subsetDependencies
-
-	// find uint64 of depfile
-	depHexString := ""
-	for _, v := range (*m).Files {
-		if v.Filepath == DepFileName {
-			depHexString = v.ChunkID
-		}
-	}
-	depFile := *(*m).Deps.Deparse()
-	depFileLength := len(depFile)
-
-	appendUcas, err := os.OpenFile(outFilename+".ucas", os.O_WRONLY|os.O_CREATE, os.ModePerm)
-	if err != nil {
-		return 0, err
-	}
-	defer appendUcas.Close()
-	// jump to the end of this file
-	appendUcas.Seek(0, os.SEEK_END)
-
-	depFileData := GameFileMetaData{
-		filepath: "",
-		chunkID:  FromHexString(depHexString),
-		metadata: FIoStoreTocEntryMeta{
-			ChunkHash: *sha1Hash(&depFile),
-			Flags:     1,
-		},
-	}
-	depFileData.offlen.SetLength(uint64(depFileLength))
-
-	offset := (*fdata)[len(*fdata)-1].offlen.GetOffset() + (*fdata)[len(*fdata)-1].offlen.GetLength()
-	offset = ((offset + CompSize - 1) / CompSize) * CompSize // align to 0x1000
-	depFileData.offlen.SetOffset(offset)
-
-	rand.Seed(time.Now().UnixNano())
-	depFileData.chunkID.ID = rand.Uint64()
-
-	// code repetition incoming... This should actually be placed in a single function... TODO <<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-	compMethodNumber := uint8(0)
-	if strings.ToLower(compression) != "none" {
-		compMethodNumber = 1
-	}
-	compFun := getCompressionFunction(compression)
-	// now perform compression, write per compressed block to ucas file
-	for len(depFile) != 0 {
-		var chunk []byte
-		var block FIoStoreTocCompressedBlockEntry
-		chunkLen := len(depFile)
-		if chunkLen > CompSize {
-			chunkLen = CompSize
-		}
-		chunk = depFile[:chunkLen]
-		cChunkPtr, err := compFun(&chunk)
-		if err != nil {
-			return 0, err
-		}
-		compressedChunk := *cChunkPtr
-
-		block.CompressionMethod = compMethodNumber
-		currOffset, _ := appendUcas.Seek(0, os.SEEK_CUR)
-		block.SetOffset(uint64(currOffset))
-		block.SetUncompressedSize(uint32(chunkLen))
-		block.SetCompressedSize(uint32(len(compressedChunk)))
-		// align this compessedChunk to 0x10 with random bytes as padding
-		compressedChunk = append(compressedChunk, getRandomBytes((0x10-(len(compressedChunk)%0x10))&(0x10-1))...)
-		depFile = depFile[chunkLen:]
-
-		depFileData.compressionBlocks = append(depFileData.compressionBlocks, block)
-
-		// write chunk to the new .ucas file
-		appendUcas.Write(compressedChunk)
-	}
-	*fdata = append(*fdata, depFileData)
-	// Dependencies file has now been added >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
 	// .ucas file has been written now; encrypt with aes if desired (why would you?)
 	if len(aes) != 0 {
@@ -414,10 +387,10 @@ func packToCasToc(dir string, m *Manifest, outFilename string, compression strin
 	}
 
 	// .utoc file must be generated, especially the directory index, which is the hardest part.
-	utocBytes, err := constructUtocFile(fdata, compression, aes)
+	utocBytes, err := constructUtocFile(&fdata, compression, aes)
 	if err != nil {
 		return 0, err
 	}
 	err = os.WriteFile(outFilename+".utoc", *utocBytes, os.ModePerm)
-	return len(*fdata), err
+	return len(fdata), err
 }
