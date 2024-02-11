@@ -230,7 +230,8 @@ func ParseDependencies(b []byte) (*Dependencies, error) {
 	}
 
 	// parse the remainder of the file as IDs I guess?
-	toParse := s.FileLength - uint32(s.Hdr.NumberOfIDs)*uint32(binary.Size(s.Conns[0]))
+	var placeHolder DepLinks
+	toParse := s.FileLength - uint32(s.Hdr.NumberOfIDs)*uint32(binary.Size(placeHolder))
 	for i := 0; i < int(toParse); i += 8 {
 		var id uint64
 		binary.Read(reader, binary.LittleEndian, &id)
